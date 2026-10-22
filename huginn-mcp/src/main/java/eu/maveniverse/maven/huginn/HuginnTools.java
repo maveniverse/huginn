@@ -17,7 +17,7 @@ import java.nio.file.Path;
 import java.util.function.Supplier;
 
 /**
- * MCP surface: six read-only tools. Descriptions are short on purpose, since every tool
+ * MCP surface: seven read-only tools. Descriptions are short on purpose, since every tool
  * description is sent to the agent on every turn. Results are compact JSON.
  */
 @ApplicationScoped
@@ -130,6 +130,19 @@ public class HuginnTools {
                             required = false)
                     Integer page) {
         return call(() -> service.search(query, limit, page));
+    }
+
+    @Tool(
+            description = "Detect which useful Maven core extensions .mvn/extensions.xml already has and propose"
+                    + " the missing ones, with the latest release and the exact snippet to add. Changes nothing.",
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
+    String extensions(@ToolArg(description = PROJECT, required = false) String project) {
+        return call(() -> service.extensions(project));
     }
 
     @Tool(

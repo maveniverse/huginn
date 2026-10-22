@@ -13,6 +13,7 @@ import eu.maveniverse.maven.huginn.project.ProjectSession.Module;
 import eu.maveniverse.maven.huginn.project.ProjectSessions;
 import eu.maveniverse.maven.huginn.render.Graphs;
 import eu.maveniverse.maven.huginn.render.Json;
+import eu.maveniverse.maven.huginn.support.Extensions;
 import eu.maveniverse.maven.huginn.support.Sources;
 import eu.maveniverse.maven.huginn.support.Versions;
 import eu.maveniverse.maven.mima.context.Context;
@@ -62,7 +63,7 @@ import org.eclipse.aether.util.graph.transformer.ConflictResolver;
 import org.eclipse.aether.version.Version;
 
 /**
- * The six operations behind the MCP tools, independent of the MCP framework. Every operation
+ * The seven operations behind the MCP tools, independent of the MCP framework. Every operation
  * is project-first: it works on the reactor that contains the given path (default: the
  * server's working directory), with that project's effective models and repositories.
  */
@@ -466,6 +467,55 @@ public final class McpService implements AutoCloseable {
         } catch (IOException e) {
             throw new ToolException("search failed: " + rootMessage(e), e);
         }
+    }
+
+    // ---- extensions ---------------------------------------------------------------------------------
+
+    public String extensions(String project) {
+        ProjectSession s = session(dir(project));
+        Path file = s.root().resolve(".mvn").resolve("extensions.xml");
+        List<Extensions.Declared> declared;
+        try {
+            declared = Extensions.read(file);
+        } catch (IOException e) {
+            throw new ToolException(rootMessage(e), e);
+        }
+        List<Map<String, Object>> installed = declared.stream()
+                .map(d -> (Map<String, Object>) Json.obj().with("id", d.id()).with("version", d.version()))
+                .toList();
+        List<Map<String, Object>> proposals = new ArrayList<>();
+        List<String> unavailable = new ArrayList<>();
+        for (Extensions.Known known : Extensions.CATALOG) {
+            if (Extensions.has(declared, known)) {
+                continue;
+            }
+            String[] ga = known.id().split(":");
+            List<String> release = Versions.recent(
+                    newerVersions(s.context(), s.context().remoteRepositories(), ga[0], ga[1], "0"), false, 1);
+            if (release.isEmpty()) {
+                unavailable.add(known.id() + " (" + known.name() + "): no release in the project's repositories");
+                continue;
+            }
+            proposals.add(Json.obj()
+                    .with("id", known.id())
+                    .with("name", known.name())
+                    .with("why", known.why())
+                    .with("version", release.get(0))
+                    .with("snippet", Extensions.snippet(known, release.get(0))));
+        }
+        boolean present = Files.isRegularFile(file);
+        return Json.write(Json.obj()
+                .with("file", s.rel(file))
+                .with("present", present)
+                .with("installed", installed)
+                .with("proposals", proposals)
+                .with("unavailable", unavailable)
+                .with(
+                        "howto",
+                        present
+                                ? "add the chosen snippets inside <extensions> in " + s.rel(file)
+                                : "create " + s.rel(file) + " as <?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                                        + "<extensions> with the chosen snippets </extensions>"));
     }
 
     // ---- sources -----------------------------------------------------------------------------------

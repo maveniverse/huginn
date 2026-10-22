@@ -41,6 +41,7 @@ final class DemoReactor {
         library("libc", List.of("1.0", "2.0", "2.1-RC1", "3.0"), null);
         library("libd", List.of("1.0"), null);
         library("pluginx", List.of("1.0", "2.0"), null);
+        library("eu.maveniverse.maven.mimir", "extension3", List.of("0.3.5", "0.3.6", "0.4.0-RC1"), null);
         sourcesJar("liba", "1.0");
 
         Path m2 = Path.of(System.getProperty("user.home")).resolve(".m2");
@@ -108,7 +109,12 @@ final class DemoReactor {
 
     /** One library with the given releases; each release depends on {@code dependency} (artifactId:version). */
     private void library(String artifactId, List<String> versions, String dependency) throws IOException {
-        Path dir = repo.resolve("com/acme/lib").resolve(artifactId);
+        library("com.acme.lib", artifactId, versions, dependency);
+    }
+
+    private void library(String groupId, String artifactId, List<String> versions, String dependency)
+            throws IOException {
+        Path dir = repo.resolve(groupId.replace('.', '/')).resolve(artifactId);
         StringBuilder metadata = new StringBuilder("<metadata><versioning><versions>");
         for (String v : versions) {
             String deps = "";
@@ -118,7 +124,7 @@ final class DemoReactor {
             }
             write(
                     dir.resolve(v).resolve(artifactId + "-" + v + ".pom"),
-                    "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme.lib</groupId><artifactId>"
+                    "<project><modelVersion>4.0.0</modelVersion><groupId>" + groupId + "</groupId><artifactId>"
                             + artifactId + "</artifactId><version>" + v + "</version>" + deps + "</project>");
             metadata.append("<version>").append(v).append("</version>");
         }

@@ -184,6 +184,43 @@ class McpServiceTest {
         assertFalse(service.versions(null, "app", null, null).contains("pluginx"));
     }
 
+    // ---- extensions ---------------------------------------------------------------------------------
+
+    @Test
+    void extensionsProposeWhatIsPublishedAndMissing() throws IOException {
+        String json = service.extensions(null);
+        assertContains(
+                json,
+                "\"present\":false",
+                "\"id\":\"eu.maveniverse.maven.mimir:extension3\"",
+                "\"version\":\"0.3.6\"", // the release, not the 0.4.0-RC1 preview
+                "<artifactId>extension3</artifactId>",
+                "create .mvn/extensions.xml",
+                "nisse:extension"); // not published to the demo repository: listed as unavailable
+        assertFalse(json.contains("0.4.0-RC1"), json);
+        assertFalse(json.contains("\"installed\""), json);
+    }
+
+    @Test
+    void extensionsAlreadyDeclaredAreNotProposedAgain() throws IOException {
+        Path file = reactor.root.resolve(".mvn/extensions.xml");
+        DemoReactor.write(
+                file,
+                "<extensions><extension><groupId>eu.maveniverse.maven.mimir</groupId>"
+                        + "<artifactId>extension3</artifactId><version>0.3.5</version></extension></extensions>");
+        try {
+            String json = service.extensions(null);
+            assertContains(
+                    json,
+                    "\"present\":true",
+                    "\"installed\":[{\"id\":\"eu.maveniverse.maven.mimir:extension3\",\"version\":\"0.3.5\"}]",
+                    "add the chosen snippets");
+            assertFalse(json.contains("\"proposals\""), json); // nothing else is published to the demo repository
+        } finally {
+            Files.delete(file);
+        }
+    }
+
     // ---- sources ------------------------------------------------------------------------------------
 
     @Test
