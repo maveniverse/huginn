@@ -24,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -75,10 +76,18 @@ public final class McpService implements AutoCloseable {
 
     private final ProjectSessions sessions = new ProjectSessions();
     private final Path defaultDir;
+    private final Path userHome;
+    private final Path mavenHome; // nullable: installation not found
     private Context standaloneContext;
 
     public McpService(Path defaultDir) {
+        this(defaultDir, Path.of(System.getProperty("user.home")), Extensions.findMavenHome());
+    }
+
+    McpService(Path defaultDir, Path userHome, Path mavenHome) {
         this.defaultDir = defaultDir.toAbsolutePath().normalize();
+        this.userHome = userHome;
+        this.mavenHome = mavenHome;
     }
 
     // ---- describe -----------------------------------------------------------------------------------
@@ -473,16 +482,29 @@ public final class McpService implements AutoCloseable {
 
     public String extensions(String project) {
         ProjectSession s = session(dir(project));
-        Path file = s.root().resolve(".mvn").resolve("extensions.xml");
-        List<Extensions.Declared> declared;
-        try {
-            declared = Extensions.read(file);
-        } catch (IOException e) {
-            throw new ToolException(rootMessage(e), e);
+        Path projectFile = s.root().resolve(".mvn").resolve("extensions.xml");
+        Path userFile = userHome.resolve(".m2").resolve("extensions.xml");
+        Path installFile = mavenHome == null ? null : mavenHome.resolve("conf").resolve("extensions.xml");
+        List<Extensions.Declared> declared = new ArrayList<>();
+        List<Map<String, Object>> installed = new ArrayList<>();
+        String[] scopes = {"project", "user", "installation"};
+        Path[] files = {projectFile, userFile, installFile};
+        for (int i = 0; i < files.length; i++) {
+            if (files[i] == null) {
+                continue;
+            }
+            try {
+                for (Extensions.Declared d : Extensions.read(files[i])) {
+                    declared.add(d);
+                    installed.add(Json.obj()
+                            .with("id", d.id())
+                            .with("version", d.version())
+                            .with("scope", scopes[i]));
+                }
+            } catch (IOException e) {
+                throw new ToolException(rootMessage(e), e);
+            }
         }
-        List<Map<String, Object>> installed = declared.stream()
-                .map(d -> (Map<String, Object>) Json.obj().with("id", d.id()).with("version", d.version()))
-                .toList();
         List<Map<String, Object>> proposals = new ArrayList<>();
         List<String> unavailable = new ArrayList<>();
         for (Extensions.Known known : Extensions.CATALOG) {
@@ -503,19 +525,33 @@ public final class McpService implements AutoCloseable {
                     .with("version", release.get(0))
                     .with("snippet", Extensions.snippet(known, release.get(0))));
         }
-        boolean present = Files.isRegularFile(file);
+        boolean present = Files.isRegularFile(userFile);
+        String mavenVersion = Extensions.mavenVersion(mavenHome);
         return Json.write(Json.obj()
-                .with("file", s.rel(file))
-                .with("present", present)
+                .with(
+                        "files",
+                        Arrays.stream(files)
+                                .filter(f -> f != null)
+                                .map(f -> f.equals(projectFile) ? s.rel(f) : f.toString())
+                                .toList())
+                .with("mavenHome", mavenHome == null ? null : mavenHome.toString())
+                .with("mavenVersion", mavenVersion)
+                .with(
+                        "maven",
+                        "recommended: Maven 3.10.x (user-wide extensions need it; MWM requires it)"
+                                + (mavenVersion != null && !mavenVersion.startsWith("3.10.")
+                                        ? "; this installation is " + mavenVersion + ", suggest upgrading"
+                                        : ""))
                 .with("installed", installed)
                 .with("proposals", proposals)
                 .with("unavailable", unavailable)
                 .with(
                         "howto",
-                        present
-                                ? "add the chosen snippets inside <extensions> in " + s.rel(file)
-                                : "create " + s.rel(file) + " as <?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-                                        + "<extensions> with the chosen snippets </extensions>"));
+                        "propose these to the user to be installed user-wide, in " + userFile + "; "
+                                + (present
+                                        ? "add the chosen snippets inside <extensions>"
+                                        : "create it as <?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                                                + "<extensions> with the chosen snippets </extensions>")));
     }
 
     // ---- sources -----------------------------------------------------------------------------------

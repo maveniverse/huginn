@@ -133,8 +133,10 @@ public class HuginnTools {
     }
 
     @Tool(
-            description = "Detect which useful Maven core extensions .mvn/extensions.xml already has and propose"
-                    + " the missing ones, with the latest release and the exact snippet to add. Changes nothing.",
+            description = "Detect which useful Maven core extensions are already declared (project .mvn/extensions.xml,"
+                    + " user ~/.m2/extensions.xml, installation conf/extensions.xml) and propose the missing ones"
+                    + " to be installed user-wide, with the latest release and the exact snippet to add. Also"
+                    + " reports the Maven version; Maven 3.10.x is recommended. Changes nothing.",
             annotations =
                     @Annotations(
                             readOnlyHint = true,

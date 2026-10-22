@@ -86,6 +86,50 @@ public final class Extensions {
         }
     }
 
+    /** Maven installation: {@code MAVEN_HOME}/{@code M2_HOME}, else the one {@code mvn} on PATH belongs to. */
+    public static Path findMavenHome() {
+        for (String v : new String[] {"MAVEN_HOME", "M2_HOME"}) {
+            String h = System.getenv(v);
+            if (h != null && !h.isBlank() && Files.isDirectory(Path.of(h))) {
+                return Path.of(h).toAbsolutePath().normalize();
+            }
+        }
+        String path = System.getenv("PATH");
+        if (path != null) {
+            for (String dir : path.split(java.io.File.pathSeparator)) {
+                Path mvn = Path.of(dir, "mvn");
+                if (Files.isExecutable(mvn)) {
+                    try {
+                        Path home = mvn.toRealPath().getParent().getParent();
+                        if (Files.isDirectory(home.resolve("conf"))) {
+                            return home;
+                        }
+                    } catch (IOException | RuntimeException e) {
+                        // ponytail: not resolvable, treat as not found
+                    }
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Version from {@code lib/maven-core-X.jar}, or null. */
+    public static String mavenVersion(Path mavenHome) {
+        if (mavenHome == null) {
+            return null;
+        }
+        try (var jars = Files.newDirectoryStream(mavenHome.resolve("lib"), "maven-core-*.jar")) {
+            for (Path j : jars) {
+                String n = j.getFileName().toString();
+                return n.substring("maven-core-".length(), n.length() - ".jar".length());
+            }
+        } catch (IOException e) {
+            // fall through
+        }
+        return null;
+    }
+
     private static String text(Element parent, String tag) {
         for (Node n = parent.getFirstChild(); n != null; n = n.getNextSibling()) {
             if (n instanceof Element e && tag.equals(e.getTagName())) {

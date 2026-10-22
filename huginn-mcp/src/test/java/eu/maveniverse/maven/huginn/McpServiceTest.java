@@ -31,7 +31,10 @@ class McpServiceTest {
     @BeforeAll
     static void setUp() throws IOException {
         reactor = new DemoReactor(tmp);
-        service = new McpService(reactor.root);
+        Path mavenHome = tmp.resolve("maven-home");
+        Files.createDirectories(mavenHome.resolve("lib"));
+        Files.createFile(mavenHome.resolve("lib/maven-core-3.9.9.jar"));
+        service = new McpService(reactor.root, tmp.resolve("home"), mavenHome);
     }
 
     @AfterAll
@@ -191,11 +194,14 @@ class McpServiceTest {
         String json = service.extensions(null);
         assertContains(
                 json,
-                "\"present\":false",
+                "recommended: Maven 3.10.x",
+                "\"mavenVersion\":\"3.9.9\"",
+                "suggest upgrading",
+                "user-wide",
                 "\"id\":\"eu.maveniverse.maven.mimir:extension3\"",
                 "\"version\":\"0.3.6\"", // the release, not the 0.4.0-RC1 preview
                 "<artifactId>extension3</artifactId>",
-                "create .mvn/extensions.xml",
+                "create it as",
                 "nisse:extension"); // not published to the demo repository: listed as unavailable
         assertFalse(json.contains("0.4.0-RC1"), json);
         assertFalse(json.contains("\"installed\""), json);
@@ -203,7 +209,7 @@ class McpServiceTest {
 
     @Test
     void extensionsAlreadyDeclaredAreNotProposedAgain() throws IOException {
-        Path file = reactor.root.resolve(".mvn/extensions.xml");
+        Path file = tmp.resolve("home/.m2/extensions.xml");
         DemoReactor.write(
                 file,
                 "<extensions><extension><groupId>eu.maveniverse.maven.mimir</groupId>"
@@ -212,8 +218,8 @@ class McpServiceTest {
             String json = service.extensions(null);
             assertContains(
                     json,
-                    "\"present\":true",
-                    "\"installed\":[{\"id\":\"eu.maveniverse.maven.mimir:extension3\",\"version\":\"0.3.5\"}]",
+                    "\"installed\":[{\"id\":\"eu.maveniverse.maven.mimir:extension3\",\"version\":\"0.3.5\","
+                            + "\"scope\":\"user\"}]",
                     "add the chosen snippets");
             assertFalse(json.contains("\"proposals\""), json); // nothing else is published to the demo repository
         } finally {

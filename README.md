@@ -16,7 +16,7 @@ There are seven tools, all read-only. Every one takes an optional `project` (any
 | `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Works for plugins too, using the project's plugin repositories. Without an artifact it lists outdated direct dependencies and plugins. |
 | `search` | Maven Central search by text or `g:`/`a:` query, paged with `limit` and `page`. |
 | `sources` | Unpacks a dependency's sources jar into `~/.cache/huginn/sources/`, or returns one class's source. Without a version, uses the version this project resolves. |
-| `extensions` | Which core extensions `.mvn/extensions.xml` declares, and which useful ones are missing (MWM, Mimir, Nisse, Muninn), each with its latest release from the project's repositories and the exact `<extension>` snippet to add. It changes nothing; applying the snippet is up to the agent. |
+| `extensions` | Which core extensions are declared in the project (`.mvn/extensions.xml`), user (`~/.m2/extensions.xml`) and installation (`$MAVEN_HOME/conf/extensions.xml`) files, and which useful ones are missing (MWM, Mimir, Nisse, Muninn), each with its latest release from the project's repositories and the exact `<extension>` snippet to add. Missing ones are proposed user-wide, and Maven 3.10.x is recommended. It changes nothing; applying the snippet is up to the agent. |
 
 Builds are deliberately not here. Running `mvn` with the Muninn extension (which the `extensions` tool proposes) gives agents a compact JSON report of the build itself; this server covers the questions a shell can't answer cheaply.
 
