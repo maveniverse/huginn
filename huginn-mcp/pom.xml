@@ -14,7 +14,7 @@
   <parent>
     <groupId>eu.maveniverse.maven.huginn</groupId>
     <artifactId>huginn</artifactId>
-    <version>0.1.1-SNAPSHOT</version>
+    <version>0.1.1</version>
   </parent>
 
   <artifactId>huginn-mcp</artifactId>
