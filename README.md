@@ -62,12 +62,12 @@ The catalog entry still needs adding to `maveniverse/jbang-catalog`, next to the
 ./mvnw clean verify
 ```
 
-The project is a parent POM with one module, `mcp`, which builds the runnable `mcp/target/huginn-mcp-<version>-runner.jar`.
+The project is a parent POM with one module, `huginn-mcp`, which builds the runnable `huginn-mcp/target/huginn-mcp-<version>-runner.jar`.
 
 Tests:
 
 - **Unit tests** cover the helpers: reactor scanning, `maven.config` parsing, the workspace reader, tree and conflict rendering, the matcher, version bands, JSON output and sources extraction.
-- **`McpServiceTest`** runs all tools but `search` against a generated demo reactor and a `file:` repository, with real Resolver and MIMA: version conflicts, a managed dependency, a reactor sibling that was never installed, `${revision}` from `maven.config`, and reload after a POM edit. It runs with a throwaway `user.home` (`mcp/target/test-home`) whose `settings.xml` mirrors everything to the file repository, so it never touches the network or your `~/.m2`.
+- **`McpServiceTest`** runs all tools but `search` against a generated demo reactor and a `file:` repository, with real Resolver and MIMA: version conflicts, a managed dependency, a reactor sibling that was never installed, `${revision}` from `maven.config`, and reload after a POM edit. It runs with a throwaway `user.home` (`huginn-mcp/target/test-home`) whose `settings.xml` mirrors everything to the file repository, so it never touches the network or your `~/.m2`.
 - **`McpServerIT`** starts the packaged runner jar and talks to it over stdio like an MCP client: tool list, schemas, hints, results and error mapping. It runs in the `integration-test` phase. Its `search` tests query Maven Central, so `verify` needs network access for them.
 
 ## Status

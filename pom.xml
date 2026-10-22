@@ -34,7 +34,7 @@
   </licenses>
 
   <modules>
-    <module>mcp</module>
+    <module>huginn-mcp</module>
   </modules>
 
   <scm>
