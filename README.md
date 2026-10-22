@@ -16,9 +16,9 @@ There are seven tools, all read-only. Every one takes an optional `project` (any
 | `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Works for plugins too, using the project's plugin repositories. Without an artifact it lists outdated direct dependencies and plugins. |
 | `search` | Maven Central search by text or `g:`/`a:` query, paged with `limit` and `page`. |
 | `sources` | Unpacks a dependency's sources jar into `~/.cache/huginn/sources/`, or returns one class's source. Without a version, uses the version this project resolves. |
-| `extensions` | Which core extensions `.mvn/extensions.xml` declares, and which useful ones are missing (Mimir, Nisse, Maven Agent Output), each with its latest release from the project's repositories and the exact `<extension>` snippet to add. It changes nothing; applying the snippet is up to the agent. |
+| `extensions` | Which core extensions `.mvn/extensions.xml` declares, and which useful ones are missing (MWM, Mimir, Nisse, Muninn), each with its latest release from the project's repositories and the exact `<extension>` snippet to add. It changes nothing; applying the snippet is up to the agent. |
 
-Builds are deliberately not here. Running `mvn` with the agent-output extension gives agents a compact JSON report of the build itself; this server covers the questions a shell can't answer cheaply.
+Builds are deliberately not here. Running `mvn` with the Muninn extension (which the `extensions` tool proposes) gives agents a compact JSON report of the build itself; this server covers the questions a shell can't answer cheaply.
 
 ## How it works
 
@@ -34,28 +34,24 @@ Builds are deliberately not here. Running `mvn` with the agent-output extension 
 With Claude Code, run this from the project directory:
 
 ```sh
-claude mcp add huginn -- jbang --quiet huginn@maveniverse
+claude mcp add huginn -- jbang --quiet huginn-mcp@maveniverse
 ```
 
 Or in an MCP client config:
 
 ```json
 "mcpServers": {
-  "huginn": { "command": "jbang", "args": ["--quiet", "huginn@maveniverse"] }
+  "huginn": { "command": "jbang", "args": ["--quiet", "huginn-mcp@maveniverse"] }
 }
+```
+
+The first time, jbang asks whether to trust the download origin, with a pop-up dialog that an MCP client can't answer. Trust it once from a terminal:
+
+```sh
+jbang trust add https://repo.maven.apache.org/maven2/eu/maveniverse/maven/huginn/
 ```
 
 The server works on its working directory by default. Set `HUGINN_PROJECT` to point it elsewhere.
-
-The catalog entry still needs adding to `maveniverse/jbang-catalog`, next to the other Maveniverse entries:
-
-```json
-"huginn": {
-  "script-ref": "https://repo.maven.apache.org/maven2/eu/maveniverse/maven/huginn/huginn-mcp/<version>/huginn-mcp-<version>-runner.jar",
-  "java-agents": [],
-  "description": "Huginn (use with --quiet)"
-}
-```
 
 ## Build
 
@@ -67,17 +63,17 @@ The project is a parent POM with one module, `huginn-mcp`, which builds the runn
 
 Tests:
 
-- **Unit tests** cover the helpers: reactor scanning, `maven.config` parsing, the workspace reader, tree and conflict rendering, the matcher, version bands, JSON output and sources extraction.
-- **`McpServiceTest`** runs all tools but `search` against a generated demo reactor and a `file:` repository, with real Resolver and MIMA: version conflicts, a managed dependency, a reactor sibling that was never installed, `${revision}` from `maven.config`, and reload after a POM edit. It runs with a throwaway `user.home` (`huginn-mcp/target/test-home`) whose `settings.xml` mirrors everything to the file repository, so it never touches the network or your `~/.m2`.
+- **Unit tests** cover the helpers: reactor scanning, `maven.config` parsing, the workspace reader, tree and conflict rendering, the matcher, version bands, profile activation, `extensions.xml` reading, JSON output and sources extraction.
+- **`McpServiceTest`** runs all tools but `search` against a generated demo reactor and a `file:` repository, with real Resolver and MIMA: version conflicts, a managed dependency, a reactor sibling that was never installed, `${revision}` from `maven.config`, plugin versions, `extensions` proposals, and reload after a POM edit. It runs with a throwaway `user.home` (`huginn-mcp/target/test-home`) whose `settings.xml` mirrors everything to the file repository, so it never touches the network or your `~/.m2`.
 - **`McpServerIT`** starts the packaged runner jar and talks to it over stdio like an MCP client: tool list, schemas, hints, results and error mapping. It runs in the `integration-test` phase. Its `search` tests query Maven Central, so `verify` needs network access for them.
 
 ## Status
 
-First cut. It needs MIMA 3 with Maven Resolver 2; the POM overrides the Resolver 1.9 pinned by the Quarkus BOM.
+It needs MIMA 3 with Maven Resolver 2; the POM overrides the Resolver 1.9 pinned by the Quarkus BOM.
 
 Not yet done:
 
-- **Release:** no release workflow, and the jbang catalog entry above is not added yet.
+- **Release:** 0.1.0 was cut with maven-release-plugin; there is no CI release workflow.
 
 Known gaps:
 
