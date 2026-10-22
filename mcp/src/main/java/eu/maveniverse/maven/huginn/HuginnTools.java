@@ -40,7 +40,12 @@ public class HuginnTools {
             description = "Describe the Maven project: at the reactor root, its modules, how they depend on each"
                     + " other and the repositories in use; for one module, its effective model (dependencies,"
                     + " plugins, properties, profiles).",
-            annotations = @Annotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false))
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = false))
     String describe(
             @ToolArg(description = PROJECT, required = false) String project,
             @ToolArg(description = MODULE, required = false) String module) {
@@ -50,7 +55,12 @@ public class HuginnTools {
     @Tool(
             description = "Resolved dependency tree of a module, as the build sees it, plus version conflicts"
                     + " (which version was requested by whom and which one won).",
-            annotations = @Annotations(readOnlyHint = true, idempotentHint = true))
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
     String dependencies(
             @ToolArg(description = PROJECT, required = false) String project,
             @ToolArg(description = MODULE, required = false) String module,
@@ -66,7 +76,12 @@ public class HuginnTools {
     @Tool(
             description = "Explain why an artifact is on the classpath: every dependency path that brings it in,"
                     + " including requests that lost a version conflict. Checks all modules unless one is given.",
-            annotations = @Annotations(readOnlyHint = true, idempotentHint = true))
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
     String why(
             @ToolArg(
                             description = "groupId:artifactId[:version], '*' wildcards allowed; a bare word matches"
@@ -82,7 +97,12 @@ public class HuginnTools {
             description = "Newer versions from the project's repositories. With artifact: candidates for that"
                     + " artifact (current version taken from the project if omitted). Without: outdated direct"
                     + " dependencies of the module, or of all modules at the reactor root.",
-            annotations = @Annotations(readOnlyHint = true, idempotentHint = true))
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
     String versions(
             @ToolArg(description = "groupId:artifactId[:version]", required = false) String artifact,
             @ToolArg(description = PROJECT, required = false) String project,
@@ -95,7 +115,12 @@ public class HuginnTools {
     @Tool(
             description = "Search Maven Central for artifacts by name or coordinates, e.g. 'jackson databind' or"
                     + " 'g:com.fasterxml.jackson.core a:jackson-databind'.",
-            annotations = @Annotations(readOnlyHint = true, idempotentHint = true))
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
     String search(
             @ToolArg(description = "Search text or g:/a:/v: query") String query,
             @ToolArg(description = "Maximum results (default 20, max 100)", required = false) Integer limit) {
@@ -105,7 +130,12 @@ public class HuginnTools {
     @Tool(
             description = "Source code of a dependency: unpacks its sources jar to a local directory, or returns"
                     + " one class's source. Without a version, uses the version this project resolves.",
-            annotations = @Annotations(readOnlyHint = true, idempotentHint = true))
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
     String sources(
             @ToolArg(description = "groupId:artifactId[:version]") String artifact,
             @ToolArg(description = "Fully qualified class name to return the source of", required = false)

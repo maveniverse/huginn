@@ -62,16 +62,26 @@ The catalog entry still needs adding to `maveniverse/jbang-catalog`, next to the
 ./mvnw clean verify
 ```
 
+The project is a parent POM with one module, `mcp`, which builds the runnable `mcp/target/huginn-mcp-<version>-runner.jar`.
+
+Tests:
+
+- **Unit tests** cover the helpers: reactor scanning, `maven.config` parsing, the workspace reader, tree and conflict rendering, the matcher, version bands, JSON output and sources extraction.
+- **`McpServiceTest`** runs all tools but `search` against a generated demo reactor and a `file:` repository, with real Resolver and MIMA: version conflicts, a managed dependency, a reactor sibling that was never installed, `${revision}` from `maven.config`, and reload after a POM edit. It runs with a throwaway `user.home` (`mcp/target/test-home`) whose `settings.xml` mirrors everything to the file repository, so it never touches the network or your `~/.m2`.
+- **`McpServerIT`** starts the packaged runner jar and talks to it over stdio like an MCP client: tool list, schemas, hints, results and error mapping. It runs in the `integration-test` phase. Its `search` tests query Maven Central, so `verify` needs network access for them.
+
 ## Status
 
-First cut. `./mvnw clean verify` passes, with 17 unit tests covering reactor scanning, `maven.config` parsing, the workspace reader, tree and conflict rendering, the matcher, version bands, JSON output and sources extraction. All six tools were also run through the built runner jar over stdio, against this project.
+First cut. It needs MIMA 3 with Maven Resolver 2; the POM overrides the Resolver 1.9 pinned by the Quarkus BOM.
 
-It needs MIMA 3 with Maven Resolver 2; the POM overrides the Resolver 1.9 pinned by the Quarkus BOM.
+Not yet done:
+
+- **Release:** no release workflow, and the jbang catalog entry above is not added yet.
 
 Known gaps:
 
 - **Profile modules:** profiles that contribute `<modules>` are honoured when they are active by default or named with `-P` in `maven.config`. Property, JDK or OS activation is not evaluated for module discovery; it is for the effective models.
 - **Maven 4:** POMs using model version 4.1.0 are not read, because the reader is Maven 3.9's.
-- **Search:** Central only, and a single page of hits.
+- **Search:** Central only (its CSC endpoint, which wants an explicit `AND` between terms, so free text is joined with `AND`), and a single page of hits.
 - **Plugins:** `versions` does not cover plugins, and plugin repositories are ignored.
 - **Upstream candidates:** a "project mode" in MIMA's MavenModelReader, and a standalone reactor locator, would let `ProjectModels` and the reactor code move upstream.

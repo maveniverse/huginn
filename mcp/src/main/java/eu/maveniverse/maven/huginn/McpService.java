@@ -403,12 +403,16 @@ public final class McpService implements AutoCloseable {
             throw new ToolException("query is required, e.g. 'guava' or 'g:com.google.guava a:guava'");
         }
         int max = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
-        try (SearchBackend backend = SmoSearchBackendFactory.createSmo(new Java11HttpClientTransport())) {
+        try (SearchBackend backend = SmoSearchBackendFactory.createCsc(new Java11HttpClientTransport())) {
             // groupId:artifactId[:version] is rewritten to Central's field syntax
             String text = query.trim();
             if (text.matches("[^\\s:]+:[^\\s:]+(:[^\\s:]+)?")) {
                 String[] gav = text.split(":");
                 text = "g:" + gav[0] + " a:" + gav[1] + (gav.length > 2 ? " v:" + gav[2] : "");
+            }
+            // Central answers HTTP 400 to terms separated by a bare space: make the AND explicit
+            if (!text.contains("\"") && !text.matches(".*\\b(AND|OR|NOT)\\b.*")) {
+                text = String.join(" AND ", text.split("\\s+"));
             }
             SearchResponse response = backend.search(new SearchRequest(Query.query(text)));
             List<String> ids = new ArrayList<>();
