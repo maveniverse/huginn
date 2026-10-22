@@ -183,6 +183,18 @@ class McpServerIT {
         assertFalse(search("slf4j api").isEmpty());
     }
 
+    /** Pages are fixed-size slices of the same result list, and 'more' tells when to ask for the next. */
+    @Test
+    void searchPages() throws IOException {
+        JsonNode first = JSON.readTree(text(call("search", "{\"query\":\"slf4j\",\"limit\":2}")));
+        JsonNode second = JSON.readTree(text(call("search", "{\"query\":\"slf4j\",\"limit\":2,\"page\":1}")));
+        assertEquals(2, first.get("results").size());
+        assertEquals(2, second.get("results").size());
+        assertEquals(1, second.get("page").asInt());
+        assertTrue(first.get("more").asBoolean(), first.toString());
+        assertFalse(first.get("results").toString().equals(second.get("results").toString()));
+    }
+
     private static JsonNode search(String query) throws IOException {
         JsonNode r = call("search", "{\"query\":\"" + query + "\",\"limit\":5}");
         assertFalse(r.get("isError").asBoolean(), r.toString());

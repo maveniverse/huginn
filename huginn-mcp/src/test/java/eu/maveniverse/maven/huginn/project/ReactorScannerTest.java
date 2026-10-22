@@ -87,4 +87,33 @@ class ReactorScannerTest {
         MavenConfig noExtra = MavenConfig.parse("-P !extra");
         assertEquals(4, ReactorScanner.scan(root, noExtra).size());
     }
+
+    @Test
+    void conditionalProfilesContributeModules(@TempDir Path tmp) throws IOException {
+        Path root = tmp.resolve("proj");
+        pom(
+                root,
+                "<groupId>com.acme</groupId><artifactId>root</artifactId><version>1</version><packaging>pom</packaging>"
+                        + "<profiles>"
+                        + "<profile><id>ci</id><activation><property><name>ci</name></property></activation>"
+                        + "<modules><module>ci-only</module></modules></profile>"
+                        + "<profile><id>jdk</id><activation><jdk>[1,)</jdk></activation>"
+                        + "<modules><module>any-jdk</module></modules></profile>"
+                        + "<profile><id>never</id><activation><os><family>nonexistent</family></os></activation>"
+                        + "<modules><module>never</module></modules></profile>"
+                        + "</profiles>");
+        for (String m : List.of("ci-only", "any-jdk", "never")) {
+            pom(root.resolve(m), "<groupId>com.acme</groupId><artifactId>" + m + "</artifactId><version>1</version>");
+        }
+        assertEquals(
+                List.of("root", "any-jdk"),
+                ReactorScanner.scan(root, MavenConfig.EMPTY).stream()
+                        .map(ReactorScanner.RawModule::artifactId)
+                        .toList());
+        assertEquals(
+                List.of("root", "ci-only", "any-jdk"),
+                ReactorScanner.scan(root, MavenConfig.parse("-Dci")).stream()
+                        .map(ReactorScanner.RawModule::artifactId)
+                        .toList());
+    }
 }

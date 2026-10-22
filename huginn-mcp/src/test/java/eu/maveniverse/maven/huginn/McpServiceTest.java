@@ -176,6 +176,14 @@ class McpServiceTest {
         assertFalse(json.contains("com.acme:core"), json); // reactor modules are not upgrade candidates
     }
 
+    @Test
+    void versionsCoverPluginsToo() {
+        String json = service.versions(null, null, null, null);
+        assertContains(json, "\"outdated_plugins\":[{\"artifact\":\"com.acme.lib:pluginx\"", "\"latest\":\"2.0\"");
+        assertContains(service.versions(null, "core", "com.acme.lib:pluginx", null), "\"current\":\"1.0\"", "\"2.0\"");
+        assertFalse(service.versions(null, "app", null, null).contains("pluginx"));
+    }
+
     // ---- sources ------------------------------------------------------------------------------------
 
     @Test

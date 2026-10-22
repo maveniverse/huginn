@@ -42,6 +42,7 @@ import org.apache.maven.search.api.Record;
 import org.apache.maven.search.api.SearchBackend;
 import org.apache.maven.search.api.SearchRequest;
 import org.apache.maven.search.api.SearchResponse;
+import org.apache.maven.search.api.request.Paging;
 import org.apache.maven.search.api.request.Query;
 import org.apache.maven.search.api.transport.java11.Java11HttpClientTransport;
 import org.apache.maven.search.backend.smo.SmoSearchBackendFactory;
@@ -295,7 +296,9 @@ public final class McpService implements AutoCloseable {
             if (current == null && s.isPresent()) {
                 current = currentVersion(s.orElseThrow(), parts[0], parts[1]).orElse(null);
             }
-            List<String> all = newerVersions(ctx, parts[0], parts[1], current != null ? current : "0");
+            List<RemoteRepository> repos =
+                    s.map(ProjectSession::allRepositories).orElseGet(ctx::remoteRepositories);
+            List<String> all = newerVersions(ctx, repos, parts[0], parts[1], current != null ? current : "0");
             Json.Obj o = Json.obj().with("artifact", parts[0] + ":" + parts[1]).with("current", current);
             if (current != null) {
                 o.putAll(Versions.candidates(current, all));
@@ -313,6 +316,7 @@ public final class McpService implements AutoCloseable {
         ps.modules().forEach(m -> reactorKeys.add(m.key()));
         // groupId:artifactId:version -> modules declaring it
         Map<String, List<String>> declared = new TreeMap<>();
+        Map<String, List<String>> declaredPlugins = new TreeMap<>();
         for (Module m : targets) {
             if (m.effective() == null) {
                 continue;
@@ -325,17 +329,46 @@ public final class McpService implements AutoCloseable {
                 declared.computeIfAbsent(key + ":" + d.getVersion(), k -> new ArrayList<>())
                         .add(ps.rel(m.raw().dir()));
             }
+            if (m.effective().getBuild() != null) {
+                for (Plugin p : m.effective().getBuild().getPlugins()) {
+                    if (p.getVersion() != null) {
+                        declaredPlugins
+                                .computeIfAbsent(
+                                        p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion(),
+                                        k -> new ArrayList<>())
+                                .add(ps.rel(m.raw().dir()));
+                    }
+                }
+            }
         }
-        List<Map<String, Object>> outdated = new ArrayList<>();
         List<String> failed = new ArrayList<>();
-        int upToDate = 0;
+        int[] upToDate = new int[1];
+        List<Map<String, Object>> outdated = outdated(declared, ps.context(), failed, upToDate);
+        List<Map<String, Object>> outdatedPlugins = outdated(declaredPlugins, ps.pluginContext(), failed, upToDate);
+        return Json.write(Json.obj()
+                .with("checked", declared.size() + declaredPlugins.size())
+                .with("up_to_date", upToDate[0])
+                .with("outdated", outdated)
+                .with("outdated_plugins", outdatedPlugins)
+                .with("errors", failed)
+                .with(
+                        "note",
+                        "direct dependencies and plugins with versions as resolved in the effective model;"
+                                + " versions set via dependencyManagement or pluginManagement change in the"
+                                + " BOM or parent that manages them; plugins bound by Maven's lifecycle are"
+                                + " listed too"));
+    }
+
+    private static List<Map<String, Object>> outdated(
+            Map<String, List<String>> declared, Context ctx, List<String> failed, int[] upToDate) {
+        List<Map<String, Object>> outdated = new ArrayList<>();
         for (Map.Entry<String, List<String>> e : declared.entrySet()) {
             String[] gav = e.getKey().split(":");
             try {
-                Map<String, Object> c =
-                        Versions.candidates(gav[2], newerVersions(ps.context(), gav[0], gav[1], gav[2]));
+                Map<String, Object> c = Versions.candidates(
+                        gav[2], newerVersions(ctx, ctx.remoteRepositories(), gav[0], gav[1], gav[2]));
                 if (c.get("latest") == null) {
-                    upToDate++;
+                    upToDate[0]++;
                     continue;
                 }
                 outdated.add(Json.obj()
@@ -347,16 +380,7 @@ public final class McpService implements AutoCloseable {
                 failed.add(gav[0] + ":" + gav[1] + ": " + ex.getMessage());
             }
         }
-        return Json.write(
-                Json.obj()
-                        .with("checked", declared.size())
-                        .with("up_to_date", upToDate)
-                        .with("outdated", outdated)
-                        .with("errors", failed)
-                        .with(
-                                "note",
-                                "direct dependencies with versions as resolved in the effective model;"
-                                        + " versions set via dependencyManagement change in the BOM or parent that manages them"));
+        return outdated;
     }
 
     private Optional<String> currentVersion(ProjectSession s, String groupId, String artifactId) {
@@ -373,6 +397,13 @@ public final class McpService implements AutoCloseable {
                     .map(org.apache.maven.model.Dependency::getVersion)
                     .filter(x -> x != null && !x.isBlank())
                     .findFirst();
+            if (v.isEmpty() && m.effective().getBuild() != null) {
+                v = m.effective().getBuild().getPlugins().stream()
+                        .filter(p -> groupId.equals(p.getGroupId()) && artifactId.equals(p.getArtifactId()))
+                        .map(Plugin::getVersion)
+                        .filter(x -> x != null && !x.isBlank())
+                        .findFirst();
+            }
             if (v.isPresent()) {
                 return v;
             }
@@ -380,10 +411,11 @@ public final class McpService implements AutoCloseable {
         return Optional.empty();
     }
 
-    private static List<String> newerVersions(Context ctx, String g, String a, String current) {
+    private static List<String> newerVersions(
+            Context ctx, List<RemoteRepository> repos, String g, String a, String current) {
         try {
-            VersionRangeRequest request = new VersionRangeRequest(
-                    new DefaultArtifact(g, a, "pom", "(" + current + ",)"), ctx.remoteRepositories(), null);
+            VersionRangeRequest request =
+                    new VersionRangeRequest(new DefaultArtifact(g, a, "pom", "(" + current + ",)"), repos, null);
             return ctx
                     .repositorySystem()
                     .resolveVersionRange(ctx.repositorySystemSession(), request)
@@ -398,11 +430,12 @@ public final class McpService implements AutoCloseable {
 
     // ---- search --------------------------------------------------------------------------------------
 
-    public String search(String query, Integer limit) {
+    public String search(String query, Integer limit, Integer page) {
         if (query == null || query.isBlank()) {
             throw new ToolException("query is required, e.g. 'guava' or 'g:com.google.guava a:guava'");
         }
         int max = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
+        int pageNo = page == null ? 0 : Math.max(0, page);
         try (SearchBackend backend = SmoSearchBackendFactory.createCsc(new Java11HttpClientTransport())) {
             // groupId:artifactId[:version] is rewritten to Central's field syntax
             String text = query.trim();
@@ -414,7 +447,7 @@ public final class McpService implements AutoCloseable {
             if (!text.contains("\"") && !text.matches(".*\\b(AND|OR|NOT)\\b.*")) {
                 text = String.join(" AND ", text.split("\\s+"));
             }
-            SearchResponse response = backend.search(new SearchRequest(Query.query(text)));
+            SearchResponse response = backend.search(new SearchRequest(new Paging(max, pageNo), Query.query(text)));
             List<String> ids = new ArrayList<>();
             for (Record r : response.getPage()) {
                 if (ids.size() >= max) {
@@ -426,6 +459,8 @@ public final class McpService implements AutoCloseable {
             return Json.write(Json.obj()
                     .with("query", query)
                     .with("total_hits", response.getTotalHits())
+                    .with("page", pageNo)
+                    .with("more", (long) (pageNo + 1) * max < response.getTotalHits() ? Boolean.TRUE : null)
                     .with("results", ids)
                     .with("note", "Maven Central only; use versions for the project's own repositories"));
         } catch (IOException e) {

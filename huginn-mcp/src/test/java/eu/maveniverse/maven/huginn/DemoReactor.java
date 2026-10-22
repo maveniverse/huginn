@@ -18,7 +18,7 @@ import java.util.zip.ZipOutputStream;
 
 /**
  * A hermetic Maven world under a temp dir: a {@code file:} repository with a few fake libraries
- * (one version conflict, several releases, one sources jar), and a two-module reactor that uses it.
+ * (one version conflict, several releases, one sources jar, one plugin), and a two-module reactor that uses it.
  * The surefire fork runs with a throwaway {@code user.home}; its settings.xml mirrors everything
  * to the file repository, so nothing touches the network or the developer's ~/.m2.
  *
@@ -40,6 +40,7 @@ final class DemoReactor {
         library("libb", List.of("1.0"), "libc:2.0");
         library("libc", List.of("1.0", "2.0", "2.1-RC1", "3.0"), null);
         library("libd", List.of("1.0"), null);
+        library("pluginx", List.of("1.0", "2.0"), null);
         sourcesJar("liba", "1.0");
 
         Path m2 = Path.of(System.getProperty("user.home")).resolve(".m2");
@@ -59,8 +60,11 @@ final class DemoReactor {
                   <modules><module>core</module><module>app</module></modules>
                   <properties><revision>0.0.0</revision></properties>
                   <repositories>
-                    <repository><id>demo</id><url>%s</url></repository>
+                    <repository><id>demo</id><url>%1$s</url></repository>
                   </repositories>
+                  <pluginRepositories>
+                    <pluginRepository><id>demo-plugins</id><url>%1$s</url></pluginRepository>
+                  </pluginRepositories>
                   <dependencyManagement>
                     <dependencies>
                       <dependency><groupId>com.acme.lib</groupId><artifactId>libd</artifactId><version>1.0</version></dependency>
@@ -68,7 +72,11 @@ final class DemoReactor {
                   </dependencyManagement>
                 </project>
                 """.formatted(repo.toUri()));
-        module("core", "<dependencies>" + dep("liba", "1.0", null) + dep("libb", "1.0", null) + "</dependencies>");
+        module(
+                "core",
+                "<dependencies>" + dep("liba", "1.0", null) + dep("libb", "1.0", null) + "</dependencies>"
+                        + "<build><plugins><plugin><groupId>com.acme.lib</groupId><artifactId>pluginx</artifactId>"
+                        + "<version>1.0</version></plugin></plugins></build>");
         write(root.resolve("app/pom.xml"), """
                 <project>
                   <modelVersion>4.0.0</modelVersion>

@@ -55,6 +55,7 @@ public final class ProjectSession implements AutoCloseable {
     private final MavenConfig config;
     private final Context baseContext;
     private final Context context;
+    private final Context pluginContext;
     private final List<Module> modules;
     private final long fingerprint;
 
@@ -63,12 +64,14 @@ public final class ProjectSession implements AutoCloseable {
             MavenConfig config,
             Context baseContext,
             Context context,
+            Context pluginContext,
             List<Module> modules,
             long fingerprint) {
         this.root = root;
         this.config = config;
         this.baseContext = baseContext;
         this.context = context;
+        this.pluginContext = pluginContext;
         this.modules = modules;
         this.fingerprint = fingerprint;
     }
@@ -132,29 +135,44 @@ public final class ProjectSession implements AutoCloseable {
             }
 
             // Repositories the project declares are part of its build; settings and mirrors still apply.
-            Map<String, RemoteRepository> repos = new LinkedHashMap<>();
-            for (RemoteRepository r : base.contextOverrides().getRepositories()) {
-                repos.put(r.getId(), r);
-            }
-            for (Module m : modules) {
-                if (m.effective() != null) {
-                    for (Repository r : m.effective().getRepositories()) {
-                        repos.putIfAbsent(r.getId(), Models.toRemoteRepository(r));
-                    }
-                }
-            }
-            Context context = derive(
-                    base,
-                    session,
-                    base.contextOverrides().toBuilder()
-                            .repositories(new ArrayList<>(repos.values()))
-                            .build());
+            // Plugins resolve from <pluginRepositories>, dependencies from <repositories>.
+            Context context = withProjectRepositories(base, session, modules, false);
+            Context pluginContext = withProjectRepositories(base, session, modules, true);
             return new ProjectSession(
-                    root, config, base, context, Collections.unmodifiableList(modules), fingerprint(root, raws));
+                    root,
+                    config,
+                    base,
+                    context,
+                    pluginContext,
+                    Collections.unmodifiableList(modules),
+                    fingerprint(root, raws));
         } catch (RuntimeException e) {
             base.close();
             throw e;
         }
+    }
+
+    private static Context withProjectRepositories(
+            Context base, RepositorySystemSession session, List<Module> modules, boolean plugins) {
+        Map<String, RemoteRepository> repos = new LinkedHashMap<>();
+        for (RemoteRepository r : base.contextOverrides().getRepositories()) {
+            repos.put(r.getId(), r);
+        }
+        for (Module m : modules) {
+            if (m.effective() != null) {
+                for (Repository r : plugins
+                        ? m.effective().getPluginRepositories()
+                        : m.effective().getRepositories()) {
+                    repos.putIfAbsent(r.getId(), Models.toRemoteRepository(r));
+                }
+            }
+        }
+        return derive(
+                base,
+                session,
+                base.contextOverrides().toBuilder()
+                        .repositories(new ArrayList<>(repos.values()))
+                        .build());
     }
 
     /**
@@ -223,6 +241,22 @@ public final class ProjectSession implements AutoCloseable {
 
     public List<RemoteRepository> repositories() {
         return context.remoteRepositories();
+    }
+
+    /** Dependency and plugin repositories together, for looking up an artifact of either kind. */
+    public List<RemoteRepository> allRepositories() {
+        Map<String, RemoteRepository> all = new LinkedHashMap<>();
+        for (RemoteRepository r : context.remoteRepositories()) {
+            all.put(r.getId(), r);
+        }
+        for (RemoteRepository r : pluginContext.remoteRepositories()) {
+            all.putIfAbsent(r.getId(), r);
+        }
+        return new ArrayList<>(all.values());
+    }
+
+    public Context pluginContext() {
+        return pluginContext;
     }
 
     public ArtifactTypeRegistry types() {

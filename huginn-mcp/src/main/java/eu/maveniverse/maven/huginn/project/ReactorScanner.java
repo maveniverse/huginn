@@ -71,7 +71,7 @@ public final class ReactorScanner {
             Path parent = cur.getParent();
             Model raw = readRaw(parent.resolve("pom.xml"));
             boolean listed = false;
-            for (String m : moduleEntries(raw, MavenConfig.EMPTY)) {
+            for (String m : moduleEntries(raw, MavenConfig.EMPTY, parent)) {
                 if (moduleDir(parent, m).equals(cur)) {
                     listed = true;
                     break;
@@ -121,24 +121,18 @@ public final class ReactorScanner {
         }
         Model raw = readRaw(pom);
         out.put(dir, raw);
-        for (String m : moduleEntries(raw, config)) {
+        for (String m : moduleEntries(raw, config, dir)) {
             collect(moduleDir(dir, m), config, out, seen);
         }
     }
 
-    /** Main modules plus those of profiles that are active by default or named in maven.config. */
-    static List<String> moduleEntries(Model raw, MavenConfig config) {
+    /** Main modules plus those of the profiles that are active for this POM, see {@link ProfileActivation}. */
+    static List<String> moduleEntries(Model raw, MavenConfig config, Path pomDir) {
         List<String> modules = new ArrayList<>(raw.getModules());
-        for (Profile p : raw.getProfiles()) {
-            boolean active = config.activeProfiles().contains(p.getId())
-                    || (p.getActivation() != null
-                            && p.getActivation().isActiveByDefault()
-                            && !config.inactiveProfiles().contains(p.getId()));
-            if (active) {
-                for (String m : p.getModules()) {
-                    if (!modules.contains(m)) {
-                        modules.add(m);
-                    }
+        for (Profile p : ProfileActivation.active(raw.getProfiles(), config, pomDir)) {
+            for (String m : p.getModules()) {
+                if (!modules.contains(m)) {
+                    modules.add(m);
                 }
             }
         }

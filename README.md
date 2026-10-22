@@ -13,8 +13,8 @@ There are six tools, all read-only. Every one takes an optional `project` (any d
 | `describe` | At the root: modules, inter-module dependencies, repositories in use, `maven.config` settings. For a module: its effective model, with dependencies, plugins and executions, properties and profiles. |
 | `dependencies` | The resolved tree, as the build sees it, plus **conflicts**: which version was requested by whom, and which one won. `scope` is compile, runtime or test; `maxDepth` caps output on large trees. |
 | `why` | Every path that brings an artifact in, **including requests that lost a conflict**, across all modules by default. One call answers both "why is X here" and "who wants the old X". |
-| `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Without an artifact it lists outdated direct dependencies. |
-| `search` | Maven Central search by text or `g:`/`a:` query. |
+| `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Works for plugins too, using the project's plugin repositories. Without an artifact it lists outdated direct dependencies and plugins. |
+| `search` | Maven Central search by text or `g:`/`a:` query, paged with `limit` and `page`. |
 | `sources` | Unpacks a dependency's sources jar into `~/.cache/huginn/sources/`, or returns one class's source. Without a version, uses the version this project resolves. |
 
 Builds are deliberately not here. Running `mvn` with the agent-output extension gives agents a compact JSON report of the build itself; this server covers the questions a shell can't answer cheaply.
@@ -80,8 +80,7 @@ Not yet done:
 
 Known gaps:
 
-- **Profile modules:** profiles that contribute `<modules>` are honoured when they are active by default or named with `-P` in `maven.config`. Property, JDK or OS activation is not evaluated for module discovery; it is for the effective models.
+- **Profile modules:** profiles that contribute `<modules>` follow Maven's activation rules (`-P` in `maven.config`, `jdk`, `os`, `property` and `file` conditions, `activeByDefault` only when nothing else is active). Properties come from `maven.config` `-D`, system properties and `env.*`; profiles from `settings.xml` are not consulted, nor are `-D` flags given only on the real command line.
 - **Maven 4:** POMs using model version 4.1.0 are not read, because the reader is Maven 3.9's.
-- **Search:** Central only (its CSC endpoint, which wants an explicit `AND` between terms, so free text is joined with `AND`), and a single page of hits.
-- **Plugins:** `versions` does not cover plugins, and plugin repositories are ignored.
+- **Search:** Central only (its CSC endpoint, which wants an explicit `AND` between terms, so free text is joined with `AND`).
 - **Upstream candidates:** a "project mode" in MIMA's MavenModelReader, and a standalone reactor locator, would let `ProjectModels` and the reactor code move upstream.

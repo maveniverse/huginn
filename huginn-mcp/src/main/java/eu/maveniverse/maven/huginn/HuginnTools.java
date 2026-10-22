@@ -95,8 +95,9 @@ public class HuginnTools {
 
     @Tool(
             description = "Newer versions from the project's repositories. With artifact: candidates for that"
-                    + " artifact (current version taken from the project if omitted). Without: outdated direct"
-                    + " dependencies of the module, or of all modules at the reactor root.",
+                    + " artifact, a dependency or a plugin (current version taken from the project if omitted)."
+                    + " Without: outdated direct dependencies and plugins of the module, or of all modules at the"
+                    + " reactor root.",
             annotations =
                     @Annotations(
                             readOnlyHint = true,
@@ -123,8 +124,12 @@ public class HuginnTools {
                             openWorldHint = true))
     String search(
             @ToolArg(description = "Search text or g:/a:/v: query") String query,
-            @ToolArg(description = "Maximum results (default 20, max 100)", required = false) Integer limit) {
-        return call(() -> service.search(query, limit));
+            @ToolArg(description = "Results per page (default 20, max 100)", required = false) Integer limit,
+            @ToolArg(
+                            description = "Zero-based page number, for more results when 'more' is true (default 0)",
+                            required = false)
+                    Integer page) {
+        return call(() -> service.search(query, limit, page));
     }
 
     @Tool(
