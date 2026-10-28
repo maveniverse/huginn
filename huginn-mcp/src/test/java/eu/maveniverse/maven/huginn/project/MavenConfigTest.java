@@ -8,6 +8,7 @@
 package eu.maveniverse.maven.huginn.project;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -30,5 +31,16 @@ class MavenConfigTest {
         MavenConfig c = MavenConfig.parse("\"-Dgreeting=hello world\" -Pfast");
         assertEquals("hello world", c.userProperties().get("greeting"));
         assertEquals(List.of("fast"), c.activeProfiles());
+    }
+
+    @Test
+    void settingsFilesAndOptionVariants() {
+        MavenConfig c = MavenConfig.parse("-s .mvn/settings.xml --global-settings=g.xml --define k=v -P ?opt,!?off");
+        assertEquals(".mvn/settings.xml", c.userSettings());
+        assertEquals("g.xml", c.globalSettings());
+        assertEquals(Map.of("k", "v"), c.userProperties());
+        assertEquals(List.of("opt"), c.activeProfiles());
+        assertEquals(List.of("off"), c.inactiveProfiles());
+        assertNull(MavenConfig.parse("-o").userSettings());
     }
 }

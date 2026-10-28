@@ -130,4 +130,14 @@ class ProfileActivationTest {
         assertEquals(List.of(), ids(profiles, MavenConfig.parse("-P !dflt"), Path.of(".")));
         assertEquals(List.of("ci"), ids(profiles, MavenConfig.parse("-Dci -P !named"), Path.of(".")));
     }
+
+    @Test
+    void jdkComesFromJavaHomeWhenSet(@TempDir Path tmp) throws IOException {
+        Files.writeString(tmp.resolve("release"), "IMPLEMENTOR=\"x\"\nJAVA_VERSION=\"21.0.4\"\n");
+        assertEquals("21.0.4", ProfileActivation.javaVersion(tmp.toString()));
+        assertEquals(
+                System.getProperty("java.version"),
+                ProfileActivation.javaVersion(tmp.resolve("none").toString()));
+        assertEquals(System.getProperty("java.version"), ProfileActivation.javaVersion(null));
+    }
 }

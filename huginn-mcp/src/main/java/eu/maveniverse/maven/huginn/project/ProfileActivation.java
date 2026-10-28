@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.huginn.project;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -35,7 +36,26 @@ final class ProfileActivation {
 
     private static final Pattern JDK_VERSION = Pattern.compile("\\d+(\\.\\d+)*");
 
+    /** Maven runs on {@code JAVA_HOME} when set, which need not be the JDK this server runs on. */
+    private static final String BUILD_JAVA_VERSION = javaVersion(System.getenv("JAVA_HOME"));
+
     private ProfileActivation() {}
+
+    /** {@code JAVA_VERSION} from {@code <javaHome>/release}, else this JVM's version. */
+    static String javaVersion(String javaHome) {
+        if (javaHome != null && !javaHome.isBlank()) {
+            try {
+                for (String line : Files.readAllLines(Path.of(javaHome, "release"))) {
+                    if (line.startsWith("JAVA_VERSION=")) {
+                        return line.substring("JAVA_VERSION=".length()).replace("\"", "");
+                    }
+                }
+            } catch (IOException | RuntimeException e) {
+                // no release file: fall back to this JVM
+            }
+        }
+        return System.getProperty("java.version", "");
+    }
 
     static List<Profile> active(List<Profile> profiles, MavenConfig config, Path pomDir) {
         List<Profile> active = new ArrayList<>();
@@ -60,7 +80,7 @@ final class ProfileActivation {
         }
         boolean any = false;
         if (a.getJdk() != null) {
-            if (!jdk(a.getJdk().trim(), System.getProperty("java.version", ""))) {
+            if (!jdk(a.getJdk().trim(), BUILD_JAVA_VERSION)) {
                 return false;
             }
             any = true;

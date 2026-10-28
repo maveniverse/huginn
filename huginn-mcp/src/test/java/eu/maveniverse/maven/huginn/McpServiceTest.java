@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.huginn;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -113,6 +114,16 @@ class McpServiceTest {
     }
 
     @Test
+    void dependenciesScopeFiltersTransitiveRuntimeDependencies() {
+        assertContains(service.dependencies(null, "core", "runtime", null), "com.acme.lib:libf:1.0");
+        assertContains(service.dependencies(null, "core", "test", null), "com.acme.lib:libf:1.0");
+        String compile = service.dependencies(null, "core", "compile", null);
+        assertContains(compile, "com.acme.lib:libe:1.0");
+        assertFalse(compile.contains("libf"), compile);
+        assertContains(service.why(null, "core", "libf", "compile"), "try scope=test");
+    }
+
+    @Test
     void dependenciesMaxDepthCountsWhatItHides() {
         String json = service.dependencies(null, "app", null, 1);
         assertContains(json, "\"id\":\"com.acme:core:1.4.0\"", "\"hidden_deps\":");
@@ -187,6 +198,12 @@ class McpServiceTest {
         assertFalse(service.versions(null, "app", null, null).contains("pluginx"));
     }
 
+    @Test
+    void versionsCandidatesIncludePreviewsWhenAsked() {
+        assertFalse(service.versions(null, null, "com.acme.lib:libc:2.0", null).contains("latest_minor"));
+        assertContains(service.versions(null, null, "com.acme.lib:libc:2.0", true), "\"latest_minor\":\"2.1-RC1\"");
+    }
+
     // ---- extensions ---------------------------------------------------------------------------------
 
     @Test
@@ -227,6 +244,14 @@ class McpServiceTest {
         }
     }
 
+    @Test
+    void extensionsWorkWithoutAProject() throws IOException {
+        Path elsewhere = Files.createDirectories(tmp.resolve("not-a-project"));
+        String json = service.extensions(elsewhere.toString());
+        assertContains(json, "\"id\":\"eu.maveniverse.maven.mimir:extension3\"");
+        assertFalse(json.contains(".mvn/extensions.xml"), json);
+    }
+
     // ---- sources ------------------------------------------------------------------------------------
 
     @Test
@@ -243,6 +268,22 @@ class McpServiceTest {
                 service.sources(null, "app", "com.acme.lib:liba", null), "\"artifact\":\"com.acme.lib:liba:1.0\"");
         assertThrows(ToolException.class, () -> service.sources(null, "app", "com.acme.lib:libz", null));
         assertThrows(ToolException.class, () -> service.sources(null, "app", "com.acme.lib:libb:1.0", null)); // no jar
+    }
+
+    @Test
+    void sourcesHintNamesTheRealArgument() {
+        assertContains(service.sources(null, "app", "com.acme.lib:liba:1.0", null), "className=");
+    }
+
+    // ---- search -------------------------------------------------------------------------------------
+
+    @Test
+    void searchRewritesCoordinatesButNotFieldQueries() {
+        assertEquals("g:com.google.guava AND a:guava", McpService.centralQuery("com.google.guava:guava"));
+        assertEquals("g:junit AND a:junit AND v:4.13", McpService.centralQuery("junit:junit:4.13"));
+        assertEquals("g:com.google.guava", McpService.centralQuery("g:com.google.guava"));
+        assertEquals("a:guava", McpService.centralQuery(" a:guava "));
+        assertEquals("jackson AND databind", McpService.centralQuery("jackson databind"));
     }
 
     // ---- reload -------------------------------------------------------------------------------------
@@ -265,5 +306,64 @@ class McpServiceTest {
             Files.writeString(pom, original);
         }
         assertContains(service.dependencies(null, "core", null, null), "liba:1.0");
+    }
+
+    @Test
+    void aModulePomCreatedAfterItIsListedReloadsTheReactor() throws IOException {
+        Path rootPom = reactor.root.resolve("pom.xml");
+        String original = Files.readString(rootPom);
+        Path extra = reactor.root.resolve("extra");
+        try {
+            Files.writeString(
+                    rootPom, original.replace("<module>app</module>", "<module>app</module><module>extra</module>"));
+            assertFalse(service.describe(null, null).contains("extra"));
+            DemoReactor.write(
+                    extra.resolve("pom.xml"),
+                    "<project><modelVersion>4.0.0</modelVersion><parent><groupId>com.acme</groupId>"
+                            + "<artifactId>parent</artifactId><version>${revision}</version></parent>"
+                            + "<artifactId>extra</artifactId></project>");
+            assertContains(service.describe(null, null), "\"id\":\"com.acme:extra:1.4.0\"");
+        } finally {
+            Files.writeString(rootPom, original);
+            Files.deleteIfExists(extra.resolve("pom.xml"));
+            Files.deleteIfExists(extra);
+        }
+        assertFalse(service.describe(null, null).contains("extra"));
+    }
+
+    @Test
+    void aBrokenModulePomIsReportedNotFatal() throws IOException {
+        Path pom = reactor.root.resolve("core/pom.xml");
+        String original = Files.readString(pom);
+        try {
+            Files.writeString(pom, original.replace("</project>", ""));
+            String json = service.describe(null, null);
+            assertContains(json, "\"id\":\"com.acme:app:1.4.0\"", "\"path\":\"core\"", "\"problem\":");
+        } finally {
+            Files.writeString(pom, original);
+        }
+        assertContains(service.describe(null, null), "\"id\":\"com.acme:core:1.4.0\"");
+    }
+
+    @Test
+    void settingsFromMavenConfigApply() throws IOException {
+        Path proj = tmp.resolve("with-settings");
+        DemoReactor.write(proj.resolve(".mvn/maven.config"), "-s .mvn/settings.xml\n");
+        DemoReactor.write(
+                proj.resolve(".mvn/settings.xml"),
+                "<settings><mirrors><mirror><id>project-mirror</id><mirrorOf>*</mirrorOf><url>" + reactor.repo.toUri()
+                        + "</url></mirror></mirrors></settings>");
+        DemoReactor.write(
+                proj.resolve("pom.xml"),
+                "<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>root</artifactId>"
+                        + "<version>1</version><packaging>pom</packaging><modules><module>m</module></modules>"
+                        + "</project>");
+        DemoReactor.write(
+                proj.resolve("m/pom.xml"),
+                "<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>m</artifactId>"
+                        + "<version>1</version></project>");
+        String json = service.describe(proj.toString(), null);
+        assertContains(json, "\"id\":\"project-mirror\"");
+        assertFalse(json.contains("demo-mirror"), json);
     }
 }

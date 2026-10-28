@@ -15,8 +15,8 @@ import java.util.regex.Pattern;
 
 /**
  * Picks the upgrade candidates an agent actually acts on: the newest version overall, within
- * the same major, and within the same minor. Pre-releases are skipped unless the current
- * version is itself a pre-release.
+ * the same major, and within the same minor. Pre-releases are skipped unless asked for, or the
+ * current version is itself a pre-release.
  */
 public final class Versions {
 
@@ -67,8 +67,8 @@ public final class Versions {
      * @return {@code latest}, {@code latest_minor} (same major), {@code latest_patch} (same
      *     major.minor); keys are absent when there is nothing newer in that band
      */
-    public static Map<String, Object> candidates(String current, List<String> newer) {
-        boolean allowPreview = isPreview(current);
+    public static Map<String, Object> candidates(String current, List<String> newer, boolean includePreviews) {
+        boolean allowPreview = includePreviews || isPreview(current);
         List<Integer> cur = numbers(current);
         String latest = null;
         String minor = null;

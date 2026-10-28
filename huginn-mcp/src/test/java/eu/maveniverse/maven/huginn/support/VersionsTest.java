@@ -32,11 +32,12 @@ class VersionsTest {
         List<String> newer = List.of("1.2.4", "1.2.5", "1.3.0", "2.0.0-RC1", "2.0.0", "2.1.0-M1");
         assertEquals(
                 "{\"latest\":\"2.0.0\",\"latest_minor\":\"1.3.0\",\"latest_patch\":\"1.2.5\"}",
-                Json.write(Versions.candidates("1.2.3", newer)));
+                Json.write(Versions.candidates("1.2.3", newer, false)));
         assertEquals(
                 "{\"latest\":\"2.1.0-M1\",\"latest_patch\":\"2.0.0\"}",
-                Json.write(Versions.candidates("2.0.0-RC1", List.of("2.0.0", "2.1.0-M1"))));
-        assertEquals("{}", Json.write(Versions.candidates("3.0", List.of("3.1-beta"))));
+                Json.write(Versions.candidates("2.0.0-RC1", List.of("2.0.0", "2.1.0-M1"), false)));
+        assertEquals("{}", Json.write(Versions.candidates("3.0", List.of("3.1-beta"), false)));
+        assertEquals("{\"latest\":\"3.1-beta\"}", Json.write(Versions.candidates("3.0", List.of("3.1-beta"), true)));
     }
 
     @Test

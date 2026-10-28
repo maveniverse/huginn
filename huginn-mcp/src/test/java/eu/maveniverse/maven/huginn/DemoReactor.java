@@ -25,6 +25,7 @@ import java.util.zip.ZipOutputStream;
  * <pre>
  * app  -&gt; core (reactor sibling, never installed) -&gt; liba:1.0 -&gt; libc:1.0
  *                                                  -&gt; libb:1.0 -&gt; libc:2.0 (loses to libc:1.0)
+ *                                                  -&gt; libe:1.0 -&gt; libf:1.0 (runtime)
  *      -&gt; libd:1.0 (test)
  * </pre>
  */
@@ -40,6 +41,8 @@ final class DemoReactor {
         library("libb", List.of("1.0"), "libc:2.0");
         library("libc", List.of("1.0", "2.0", "2.1-RC1", "3.0"), null);
         library("libd", List.of("1.0"), null);
+        library("libe", List.of("1.0"), "libf:1.0:runtime");
+        library("libf", List.of("1.0"), null);
         library("pluginx", List.of("1.0", "2.0"), null);
         library("eu.maveniverse.maven.mimir", "extension3", List.of("0.3.5", "0.3.6", "0.4.0-RC1"), null);
         sourcesJar("liba", "1.0");
@@ -75,7 +78,8 @@ final class DemoReactor {
                 """.formatted(repo.toUri()));
         module(
                 "core",
-                "<dependencies>" + dep("liba", "1.0", null) + dep("libb", "1.0", null) + "</dependencies>"
+                "<dependencies>" + dep("liba", "1.0", null) + dep("libb", "1.0", null) + dep("libe", "1.0", null)
+                        + "</dependencies>"
                         + "<build><plugins><plugin><groupId>com.acme.lib</groupId><artifactId>pluginx</artifactId>"
                         + "<version>1.0</version></plugin></plugins></build>");
         write(root.resolve("app/pom.xml"), """
@@ -107,7 +111,7 @@ final class DemoReactor {
                 + version + "</version>" + (scope != null ? "<scope>" + scope + "</scope>" : "") + "</dependency>";
     }
 
-    /** One library with the given releases; each release depends on {@code dependency} (artifactId:version). */
+    /** One library with the given releases; each release depends on {@code dependency} (artifactId:version[:scope]). */
     private void library(String artifactId, List<String> versions, String dependency) throws IOException {
         library("com.acme.lib", artifactId, versions, dependency);
     }
@@ -120,7 +124,7 @@ final class DemoReactor {
             String deps = "";
             if (dependency != null) {
                 String[] d = dependency.split(":");
-                deps = "<dependencies>" + dep(d[0], d[1], null) + "</dependencies>";
+                deps = "<dependencies>" + dep(d[0], d[1], d.length > 2 ? d[2] : null) + "</dependencies>";
             }
             write(
                     dir.resolve(v).resolve(artifactId + "-" + v + ".pom"),
