@@ -165,7 +165,9 @@ public class HuginnTools {
         return call(() -> service.sources(project, module, artifact, className));
     }
 
-    private static String call(Supplier<String> op) {
+    // ponytail: one call at a time, so a reload never closes a session another call is using;
+    // reference-count sessions if an agent ever needs parallel calls
+    private static synchronized String call(Supplier<String> op) {
         try {
             return op.get();
         } catch (ToolException e) {

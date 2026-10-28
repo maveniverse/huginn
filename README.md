@@ -26,7 +26,7 @@ Builds are deliberately not here. Running `mvn` with the Muninn extension (which
 - **The project's repositories:** repositories declared in the POMs are added to those from settings, and mirrors and authentication from settings apply.
 - **Reactor siblings resolve from the working tree:** a workspace reader serves modules that were never installed, including their effective models, the same way Maven's `ReactorReader` does.
 - **CI-friendly versions work:** `-D` and `-P` from `.mvn/maven.config` apply, with user properties winning as on the command line. MIMA's `MavenModelReader` deliberately demotes user properties for dependency POMs (MNG-7563), so project models are built separately in `ProjectModels`.
-- **Few tools:** six, because every tool description costs the agent context on every turn.
+- **Few tools:** seven, because every tool description costs the agent context on every turn.
 - **Caching:** a loaded reactor is cached and reloaded only when a POM or `maven.config` changes. Unpacked sources are cached under `$XDG_CACHE_HOME/huginn/sources/` (default `~/.cache`), and logs go to `~/.cache/huginn/huginn.log`, since stdout belongs to the MCP protocol.
 
 ## Use

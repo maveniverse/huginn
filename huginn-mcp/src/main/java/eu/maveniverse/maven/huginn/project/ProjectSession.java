@@ -17,9 +17,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Repository;
 import org.eclipse.aether.DefaultRepositorySystemSession;
@@ -89,6 +91,13 @@ public final class ProjectSession implements AutoCloseable {
         if (config.offline()) {
             ob.offline(true);
         }
+        // relative to where mvn runs, which for maven.config is the root
+        if (config.userSettings() != null) {
+            ob.withUserSettingsXmlOverride(root.resolve(config.userSettings()));
+        }
+        if (config.globalSettings() != null) {
+            ob.withGlobalSettingsXmlOverride(root.resolve(config.globalSettings()));
+        }
         Context base = Runtimes.INSTANCE.getRuntime().create(ob.build());
         try {
             ReactorWorkspaceReader workspace = new ReactorWorkspaceReader();
@@ -145,7 +154,7 @@ public final class ProjectSession implements AutoCloseable {
                     context,
                     pluginContext,
                     Collections.unmodifiableList(modules),
-                    fingerprint(root, raws));
+                    fingerprint(root, raws, config));
         } catch (RuntimeException e) {
             base.close();
             throw e;
@@ -198,13 +207,27 @@ public final class ProjectSession implements AutoCloseable {
         return type != null ? type.getExtension() : packaging;
     }
 
-    /** Changes when any reactor POM or maven.config changes; module lists live in POMs. */
-    static long fingerprint(Path root, List<ReactorScanner.RawModule> raws) {
+    /**
+     * Changes when any reactor POM, maven.config or settings.xml changes; module lists live in
+     * POMs. POMs of listed modules that do not exist yet count too: they are created after the
+     * module is listed.
+     */
+    static long fingerprint(Path root, List<ReactorScanner.RawModule> raws, MavenConfig config) {
         long h = 17;
-        List<Path> files = new ArrayList<>();
+        Set<Path> files = new LinkedHashSet<>();
         files.add(root.resolve(".mvn/maven.config"));
+        files.add(
+                config.userSettings() != null
+                        ? root.resolve(config.userSettings())
+                        : Path.of(System.getProperty("user.home"), ".m2", "settings.xml"));
+        if (config.globalSettings() != null) {
+            files.add(root.resolve(config.globalSettings()));
+        }
         for (ReactorScanner.RawModule r : raws) {
             files.add(r.pom());
+            for (String m : ReactorScanner.moduleEntries(r.raw(), config, r.dir())) {
+                files.add(ReactorScanner.moduleDir(r.dir(), m).resolve("pom.xml"));
+            }
         }
         for (Path f : files) {
             h = 31 * h + f.hashCode();
@@ -218,9 +241,9 @@ public final class ProjectSession implements AutoCloseable {
         return h;
     }
 
-    /** Only stats known files: a new module always means an edited POM, which is among them. */
+    /** Only stats known files: a new module means an edited POM or a listed POM appearing, both among them. */
     boolean isStale() {
-        return fingerprint(root, modules.stream().map(Module::raw).toList()) != fingerprint;
+        return fingerprint(root, modules.stream().map(Module::raw).toList(), config) != fingerprint;
     }
 
     public Path root() {

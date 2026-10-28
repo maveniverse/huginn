@@ -52,10 +52,6 @@ final class ReactorWorkspaceReader implements MavenWorkspaceReader {
         return e != null && e.model() != null ? e.model().clone() : null;
     }
 
-    void clear() {
-        byGav.clear();
-    }
-
     @Override
     public WorkspaceRepository getRepository() {
         return repository;

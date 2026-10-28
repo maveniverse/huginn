@@ -97,19 +97,28 @@ public final class Extensions {
         String path = System.getenv("PATH");
         if (path != null) {
             for (String dir : path.split(java.io.File.pathSeparator)) {
-                Path mvn = Path.of(dir, "mvn");
-                if (Files.isExecutable(mvn)) {
-                    try {
-                        Path home = mvn.toRealPath().getParent().getParent();
-                        if (Files.isDirectory(home.resolve("conf"))) {
-                            return home;
-                        }
-                    } catch (IOException | RuntimeException e) {
-                        // ponytail: not resolvable, treat as not found
+                for (String name : new String[] {"mvn", "mvn.cmd"}) {
+                    Path mvn = Path.of(dir, name);
+                    if (Files.isExecutable(mvn)) {
+                        return homeOf(mvn);
                     }
-                    return null;
                 }
             }
+        }
+        return null;
+    }
+
+    /** The installation {@code bin/mvn} belongs to; Homebrew keeps it under {@code libexec/}. */
+    static Path homeOf(Path mvn) {
+        try {
+            Path home = mvn.toRealPath().getParent().getParent();
+            for (Path h : new Path[] {home, home.resolve("libexec")}) {
+                if (Files.isDirectory(h.resolve("conf"))) {
+                    return h;
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // ponytail: not resolvable, treat as not found
         }
         return null;
     }
@@ -128,6 +137,12 @@ public final class Extensions {
             // fall through
         }
         return null;
+    }
+
+    /** Maven 4 and later 3.x need no upgrade; an unparseable version is not flagged. */
+    public static boolean olderThan310(String mavenVersion) {
+        List<Integer> n = Versions.numbers(mavenVersion);
+        return n.size() >= 2 && n.get(0) == 3 && n.get(1) < 10;
     }
 
     private static String text(Element parent, String tag) {

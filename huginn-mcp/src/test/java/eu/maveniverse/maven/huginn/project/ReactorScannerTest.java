@@ -56,6 +56,13 @@ class ReactorScannerTest {
     }
 
     @Test
+    void dotMvnWithoutPomIsNoRoot(@TempDir Path tmp) throws IOException {
+        Files.createDirectories(tmp.resolve(".mvn"));
+        Path root = reactor(tmp.resolve("proj"));
+        assertEquals(root, ReactorScanner.findRoot(root.resolve("a/sub")));
+    }
+
+    @Test
     void rootWithoutDotMvnIsOutermostAggregator(@TempDir Path tmp) throws IOException {
         Path root = reactor(tmp.resolve("proj"));
         Files.createDirectories(root.resolve("a/sub/src/main/java"));

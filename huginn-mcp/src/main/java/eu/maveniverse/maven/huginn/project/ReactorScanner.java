@@ -47,8 +47,9 @@ public final class ReactorScanner {
     private ReactorScanner() {}
 
     /**
-     * The reactor root for {@code start}: the nearest directory with {@code .mvn/} (Maven's own
-     * rule), otherwise the outermost aggregator POM that lists {@code start} as a module.
+     * The reactor root for {@code start}: the nearest directory with {@code .mvn/} and a POM
+     * (Maven's own rule; a {@code .mvn/} without a POM, such as {@code ~/.mvn}, is no reactor),
+     * otherwise the outermost aggregator POM that lists {@code start} as a module.
      */
     public static Path findRoot(Path start) throws IOException {
         Path dir = start.toAbsolutePath().normalize();
@@ -56,7 +57,7 @@ public final class ReactorScanner {
             dir = dir.getParent();
         }
         for (Path p = dir; p != null; p = p.getParent()) {
-            if (Files.isDirectory(p.resolve(".mvn"))) {
+            if (Files.isDirectory(p.resolve(".mvn")) && Files.isRegularFile(p.resolve("pom.xml"))) {
                 return p;
             }
         }
@@ -119,7 +120,18 @@ public final class ReactorScanner {
         if (!Files.isRegularFile(pom)) {
             return;
         }
-        Model raw = readRaw(pom);
+        Model raw;
+        try {
+            raw = readRaw(pom);
+        } catch (IOException e) {
+            if (out.isEmpty()) {
+                throw e; // the root itself: there is no reactor to describe
+            }
+            // a module mid-edit must not take the whole reactor down: building its effective
+            // model fails again and reports the parse error as the module's problem
+            raw = new Model();
+            raw.setArtifactId(dir.getFileName().toString());
+        }
         out.put(dir, raw);
         for (String m : moduleEntries(raw, config, dir)) {
             collect(moduleDir(dir, m), config, out, seen);

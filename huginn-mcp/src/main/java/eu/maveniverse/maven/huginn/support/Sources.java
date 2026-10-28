@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Comparator;
 import java.util.Optional;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -34,12 +35,21 @@ public final class Sources {
         return base.resolve("huginn").resolve("sources");
     }
 
-    /** Extracts once; later calls return the existing directory. */
+    /** Extracts once per jar; later calls return the existing directory until the jar changes (snapshots). */
     public static Path extract(Path jar, Path cacheRoot, String groupId, String artifactId, String version)
             throws IOException {
         Path dir = cacheRoot.resolve(groupId).resolve(artifactId).resolve(version);
-        if (Files.isRegularFile(dir.resolve(COMPLETE))) {
-            return dir;
+        if (!dir.toAbsolutePath()
+                .normalize()
+                .startsWith(cacheRoot.toAbsolutePath().normalize())) {
+            throw new IOException("invalid coordinates " + groupId + ":" + artifactId + ":" + version);
+        }
+        Path complete = dir.resolve(COMPLETE);
+        if (Files.isRegularFile(complete)) {
+            if (Files.getLastModifiedTime(complete).compareTo(Files.getLastModifiedTime(jar)) >= 0) {
+                return dir;
+            }
+            deleteRecursively(dir); // a newer jar: drop what it no longer has
         }
         Files.createDirectories(dir);
         Path normalized = dir.toAbsolutePath().normalize();
@@ -63,8 +73,22 @@ public final class Sources {
         return dir;
     }
 
+    private static void deleteRecursively(Path dir) throws IOException {
+        try (Stream<Path> s = Files.walk(dir)) {
+            for (Path p : s.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(p);
+            }
+        }
+    }
+
     /** {@code com.acme.Foo} or {@code com.acme.Foo$Inner} to its source file, any JVM language. */
     public static Optional<Path> findClass(Path dir, String className) {
+        Path root = dir.toAbsolutePath().normalize();
+        return findClassFile(dir, className)
+                .filter(p -> p.toAbsolutePath().normalize().startsWith(root));
+    }
+
+    private static Optional<Path> findClassFile(Path dir, String className) {
         String outer = className.contains("$") ? className.substring(0, className.indexOf('$')) : className;
         String base = outer.replace('.', '/');
         for (String ext : new String[] {".java", ".kt", ".groovy", ".scala"}) {

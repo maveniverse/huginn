@@ -25,6 +25,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,7 +35,9 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
@@ -197,15 +201,16 @@ public final class McpService implements AutoCloseable {
         o.with("plugins", plugins);
 
         Properties props = e.getProperties();
-        Map<String, Object> shown = new TreeMap<>();
-        for (String k : props.stringPropertyNames()) {
+        Set<String> names = new TreeSet<>(props.stringPropertyNames());
+        Map<String, Object> shown = new LinkedHashMap<>();
+        for (String k : names) {
             if (shown.size() < MAX_PROPERTIES) {
                 shown.put(k, props.getProperty(k));
             }
         }
         o.with("properties", shown);
-        if (props.size() > MAX_PROPERTIES) {
-            o.with("properties_omitted", props.size() - MAX_PROPERTIES);
+        if (names.size() > MAX_PROPERTIES) {
+            o.with("properties_omitted", names.size() - MAX_PROPERTIES);
         }
 
         List<Map<String, Object>> profiles = new ArrayList<>();
@@ -311,7 +316,7 @@ public final class McpService implements AutoCloseable {
             List<String> all = newerVersions(ctx, repos, parts[0], parts[1], current != null ? current : "0");
             Json.Obj o = Json.obj().with("artifact", parts[0] + ":" + parts[1]).with("current", current);
             if (current != null) {
-                o.putAll(Versions.candidates(current, all));
+                o.putAll(Versions.candidates(current, all, previews));
             }
             return Json.write(o.with("recent", Versions.recent(all, previews, 15)));
         }
@@ -353,8 +358,9 @@ public final class McpService implements AutoCloseable {
         }
         List<String> failed = new ArrayList<>();
         int[] upToDate = new int[1];
-        List<Map<String, Object>> outdated = outdated(declared, ps.context(), failed, upToDate);
-        List<Map<String, Object>> outdatedPlugins = outdated(declaredPlugins, ps.pluginContext(), failed, upToDate);
+        List<Map<String, Object>> outdated = outdated(declared, ps.context(), previews, failed, upToDate);
+        List<Map<String, Object>> outdatedPlugins =
+                outdated(declaredPlugins, ps.pluginContext(), previews, failed, upToDate);
         return Json.write(Json.obj()
                 .with("checked", declared.size() + declaredPlugins.size())
                 .with("up_to_date", upToDate[0])
@@ -370,13 +376,13 @@ public final class McpService implements AutoCloseable {
     }
 
     private static List<Map<String, Object>> outdated(
-            Map<String, List<String>> declared, Context ctx, List<String> failed, int[] upToDate) {
+            Map<String, List<String>> declared, Context ctx, boolean previews, List<String> failed, int[] upToDate) {
         List<Map<String, Object>> outdated = new ArrayList<>();
         for (Map.Entry<String, List<String>> e : declared.entrySet()) {
             String[] gav = e.getKey().split(":");
             try {
                 Map<String, Object> c = Versions.candidates(
-                        gav[2], newerVersions(ctx, ctx.remoteRepositories(), gav[0], gav[1], gav[2]));
+                        gav[2], newerVersions(ctx, ctx.remoteRepositories(), gav[0], gav[1], gav[2]), previews);
                 if (c.get("latest") == null) {
                     upToDate[0]++;
                     continue;
@@ -447,17 +453,8 @@ public final class McpService implements AutoCloseable {
         int max = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
         int pageNo = page == null ? 0 : Math.max(0, page);
         try (SearchBackend backend = SmoSearchBackendFactory.createCsc(new Java11HttpClientTransport())) {
-            // groupId:artifactId[:version] is rewritten to Central's field syntax
-            String text = query.trim();
-            if (text.matches("[^\\s:]+:[^\\s:]+(:[^\\s:]+)?")) {
-                String[] gav = text.split(":");
-                text = "g:" + gav[0] + " a:" + gav[1] + (gav.length > 2 ? " v:" + gav[2] : "");
-            }
-            // Central answers HTTP 400 to terms separated by a bare space: make the AND explicit
-            if (!text.contains("\"") && !text.matches(".*\\b(AND|OR|NOT)\\b.*")) {
-                text = String.join(" AND ", text.split("\\s+"));
-            }
-            SearchResponse response = backend.search(new SearchRequest(new Paging(max, pageNo), Query.query(text)));
+            SearchResponse response =
+                    backend.search(new SearchRequest(new Paging(max, pageNo), Query.query(centralQuery(query))));
             List<String> ids = new ArrayList<>();
             for (Record r : response.getPage()) {
                 if (ids.size() >= max) {
@@ -478,11 +475,28 @@ public final class McpService implements AutoCloseable {
         }
     }
 
+    static String centralQuery(String query) {
+        // groupId:artifactId[:version] is rewritten to Central's field syntax; g:x or a:x already is
+        String text = query.trim();
+        if (text.matches("[^\\s:]+:[^\\s:]+(:[^\\s:]+)?") && !text.matches("(g|a|v|p|c|l|fc):.*")) {
+            String[] gav = text.split(":");
+            text = "g:" + gav[0] + " a:" + gav[1] + (gav.length > 2 ? " v:" + gav[2] : "");
+        }
+        // Central answers HTTP 400 to terms separated by a bare space: make the AND explicit
+        if (!text.contains("\"") && !text.matches(".*\\b(AND|OR|NOT)\\b.*")) {
+            text = String.join(" AND ", text.split("\\s+"));
+        }
+        return text;
+    }
+
     // ---- extensions ---------------------------------------------------------------------------------
 
     public String extensions(String project) {
-        ProjectSession s = session(dir(project));
-        Path projectFile = s.root().resolve(".mvn").resolve("extensions.xml");
+        // user and installation files need no project; repositories come from settings then
+        Optional<ProjectSession> s = optionalSession(dir(project));
+        Context ctx = s.map(ProjectSession::context).orElseGet(this::standaloneContext);
+        Path projectFile =
+                s.map(ps -> ps.root().resolve(".mvn").resolve("extensions.xml")).orElse(null);
         Path userFile = userHome.resolve(".m2").resolve("extensions.xml");
         Path installFile = mavenHome == null ? null : mavenHome.resolve("conf").resolve("extensions.xml");
         List<Extensions.Declared> declared = new ArrayList<>();
@@ -512,8 +526,13 @@ public final class McpService implements AutoCloseable {
                 continue;
             }
             String[] ga = known.id().split(":");
-            List<String> release = Versions.recent(
-                    newerVersions(s.context(), s.context().remoteRepositories(), ga[0], ga[1], "0"), false, 1);
+            List<String> release;
+            try {
+                release = Versions.recent(newerVersions(ctx, ctx.remoteRepositories(), ga[0], ga[1], "0"), false, 1);
+            } catch (ToolException e) {
+                unavailable.add(known.id() + " (" + known.name() + "): " + e.getMessage());
+                continue;
+            }
             if (release.isEmpty()) {
                 unavailable.add(known.id() + " (" + known.name() + "): no release in the project's repositories");
                 continue;
@@ -532,14 +551,15 @@ public final class McpService implements AutoCloseable {
                         "files",
                         Arrays.stream(files)
                                 .filter(f -> f != null)
-                                .map(f -> f.equals(projectFile) ? s.rel(f) : f.toString())
+                                .map(f ->
+                                        f.equals(projectFile) ? s.orElseThrow().rel(f) : f.toString())
                                 .toList())
                 .with("mavenHome", mavenHome == null ? null : mavenHome.toString())
                 .with("mavenVersion", mavenVersion)
                 .with(
                         "maven",
                         "recommended: Maven 3.10.x (user-wide extensions need it; MWM requires it)"
-                                + (mavenVersion != null && !mavenVersion.startsWith("3.10.")
+                                + (mavenVersion != null && Extensions.olderThan310(mavenVersion)
                                         ? "; this installation is " + mavenVersion + ", suggest upgrading"
                                         : ""))
                 .with("installed", installed)
@@ -613,7 +633,7 @@ public final class McpService implements AutoCloseable {
             }
         }
         return Json.write(o.with("files", Sources.countSourceFiles(extracted))
-                .with("hint", "read files under dir, or call again with class=<fully qualified name>"));
+                .with("hint", "read files under dir, or call again with className=<fully qualified name>"));
     }
 
     /** The version the project actually ends up with: declared, managed, or selected in the graph. */
@@ -676,13 +696,37 @@ public final class McpService implements AutoCloseable {
             request.setDependencies(deps);
             request.setManagedDependencies(Models.managedDependencies(e, s.types()));
             request.setRepositories(s.context().remoteRepositories());
-            return s.context().repositorySystem().collectDependencies(session, request);
+            CollectResult result = s.context().repositorySystem().collectDependencies(session, request);
+            prune(result.getRoot(), scope.direct, Collections.newSetFromMap(new IdentityHashMap<>()));
+            return result;
         } catch (DependencyCollectionException ex) {
             if (ex.getResult() != null && ex.getResult().getRoot() != null) {
-                return ex.getResult(); // partial graph plus its exceptions beats no answer
+                // partial graph plus its exceptions beats no answer
+                prune(ex.getResult().getRoot(), scope.direct, Collections.newSetFromMap(new IdentityHashMap<>()));
+                return ex.getResult();
             }
             throw new ToolException(
                     "cannot collect dependencies of " + s.rel(m.raw().dir()) + ": " + rootMessage(ex), ex);
+        }
+    }
+
+    /**
+     * Like Maven, filters the resolved graph by classpath scope: the scope of a transitive node is
+     * derived (runtime below compile stays runtime), so filtering direct dependencies is not enough.
+     */
+    private static void prune(DependencyNode node, Set<String> scopes, Set<DependencyNode> seen) {
+        if (!seen.add(node)) {
+            return;
+        }
+        node.setChildren(node.getChildren().stream()
+                .filter(c -> c.getDependency() == null
+                        || scopes.contains(
+                                c.getDependency().getScope().isEmpty()
+                                        ? "compile"
+                                        : c.getDependency().getScope()))
+                .collect(Collectors.toCollection(ArrayList::new)));
+        for (DependencyNode c : node.getChildren()) {
+            prune(c, scopes, seen);
         }
     }
 

@@ -9,6 +9,7 @@ package eu.maveniverse.maven.huginn.support;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -16,6 +17,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
@@ -40,7 +42,8 @@ class SourcesTest {
     @Test
     void extractsOnceAndRefusesZipSlip(@TempDir Path tmp) throws IOException {
         Path cache = tmp.resolve("cache");
-        Path dir = Sources.extract(jar(tmp), cache, "com.acme", "lib", "1.0");
+        Path jar = jar(tmp);
+        Path dir = Sources.extract(jar, cache, "com.acme", "lib", "1.0");
         assertEquals(cache.resolve("com.acme/lib/1.0"), dir);
         assertTrue(Files.isRegularFile(dir.resolve("com/acme/Foo.java")));
         assertFalse(Files.exists(tmp.resolve("evil.txt")));
@@ -48,8 +51,21 @@ class SourcesTest {
         assertEquals(2, Sources.countSourceFiles(dir));
 
         Files.delete(dir.resolve("com/acme/Foo.java"));
-        Sources.extract(jar(tmp), cache, "com.acme", "lib", "1.0");
+        Sources.extract(jar, cache, "com.acme", "lib", "1.0");
         assertFalse(Files.exists(dir.resolve("com/acme/Foo.java")), "second call reuses the extracted directory");
+
+        assertThrows(IOException.class, () -> Sources.extract(jar, cache, "..", "..", "x"));
+    }
+
+    @Test
+    void aNewerJarIsExtractedAgain(@TempDir Path tmp) throws IOException {
+        Path cache = tmp.resolve("cache");
+        Path jar = jar(tmp);
+        Path dir = Sources.extract(jar, cache, "com.acme", "lib", "1.0-SNAPSHOT");
+        Files.delete(dir.resolve("com/acme/Foo.java"));
+        Files.setLastModifiedTime(jar, FileTime.fromMillis(System.currentTimeMillis() + 60_000));
+        Sources.extract(jar, cache, "com.acme", "lib", "1.0-SNAPSHOT");
+        assertTrue(Files.exists(dir.resolve("com/acme/Foo.java")));
     }
 
     @Test
@@ -62,5 +78,9 @@ class SourcesTest {
                 dir.resolve("com/acme/Extensions.kt"),
                 Sources.findClass(dir, "com.acme.ExtensionsKt").orElseThrow());
         assertTrue(Sources.findClass(dir, "com.acme.Missing").isEmpty());
+        Path outside = tmp.resolve("Outside.java");
+        Files.writeString(outside, "class Outside {}");
+        assertTrue(
+                Sources.findClass(dir, outside.toString().replace(".java", "")).isEmpty());
     }
 }

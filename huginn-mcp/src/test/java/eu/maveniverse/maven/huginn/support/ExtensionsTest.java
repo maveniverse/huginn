@@ -9,6 +9,7 @@ package eu.maveniverse.maven.huginn.support;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -72,5 +73,30 @@ class ExtensionsTest {
         assertTrue(s.startsWith("<extension>") && s.endsWith("</extension>"), s);
         assertTrue(s.contains("<version>1.2.3</version>"), s);
         assertFalse(s.contains("<?xml"), s);
+    }
+
+    @Test
+    void mavenHomeOfPlainAndHomebrewLayouts(@TempDir Path tmp) throws IOException {
+        Path plain = tmp.resolve("apache-maven");
+        Files.createDirectories(plain.resolve("conf"));
+        Files.createDirectories(plain.resolve("bin"));
+        Files.createFile(plain.resolve("bin/mvn"));
+        assertEquals(plain.toRealPath(), Extensions.homeOf(plain.resolve("bin/mvn")));
+
+        Path cellar = tmp.resolve("Cellar/maven/3.9.9");
+        Files.createDirectories(cellar.resolve("libexec/conf"));
+        Files.createDirectories(cellar.resolve("bin"));
+        Files.createFile(cellar.resolve("bin/mvn"));
+        assertEquals(cellar.resolve("libexec").toRealPath(), Extensions.homeOf(cellar.resolve("bin/mvn")));
+
+        assertNull(Extensions.homeOf(tmp.resolve("nowhere/bin/mvn")));
+    }
+
+    @Test
+    void onlyMavenOlderThan310IsFlagged() {
+        assertTrue(Extensions.olderThan310("3.9.9"));
+        assertFalse(Extensions.olderThan310("3.10.0"));
+        assertFalse(Extensions.olderThan310("4.0.0-rc-4"));
+        assertFalse(Extensions.olderThan310("unknown"));
     }
 }
