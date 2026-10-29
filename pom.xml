@@ -69,7 +69,7 @@
     <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
     <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
     <quarkus.platform.version>3.40.1.1</quarkus.platform.version>
-    <quarkus.mcp-server.version>2.0.3</quarkus.mcp-server.version>
+    <quarkus.mcp-server.version>2.0.4</quarkus.mcp-server.version>
   </properties>
 
   <dependencyManagement>
