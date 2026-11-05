@@ -1,4 +1,4 @@
-# Huginn
+# Maveniverse Huginn
 
 A project-aware MCP server for Maven, for coding agents. It answers questions about the build the agent is actually editing: that reactor's effective models, its repositories and its resolved dependency graph, rather than an arbitrary GAV on Maven Central.
 
