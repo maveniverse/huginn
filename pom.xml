@@ -64,7 +64,7 @@
 
     <version.mase>1.1.2</version.mase>
     <version.mima>3.0.1</version.mima>
-    <version.resolver>2.0.24</version.resolver>
+    <version.resolver>2.0.25</version.resolver>
 
     <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
     <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
