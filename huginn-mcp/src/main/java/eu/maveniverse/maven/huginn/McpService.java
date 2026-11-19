@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -41,8 +42,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.apache.maven.model.InputLocation;
+import org.apache.maven.model.InputLocationTracker;
+import org.apache.maven.model.InputSource;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.model.PluginExecution;
@@ -162,10 +168,12 @@ public final class McpService implements AutoCloseable {
         }
         o.with("modules", e.getModules());
 
+        Map<String, List<String>> lines = new HashMap<>();
         List<Map<String, Object>> deps = new ArrayList<>();
         for (org.apache.maven.model.Dependency d : e.getDependencies()) {
             Dependency rd = Models.toDependency(d, s.types());
             Json.Obj dj = Json.obj().with("id", Models.id(rd.getArtifact()));
+            dj.putAll(versionOrigin(s, m, m, d, lines));
             if (d.getScope() != null && !"compile".equals(d.getScope())) {
                 dj.with("scope", d.getScope());
             }
@@ -192,6 +200,7 @@ public final class McpService implements AutoCloseable {
         if (e.getBuild() != null) {
             for (Plugin p : e.getBuild().getPlugins()) {
                 Json.Obj pj = Json.obj().with("id", p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion());
+                pj.putAll(versionOrigin(s, m, m, p, lines));
                 List<Map<String, Object>> execs = new ArrayList<>();
                 for (PluginExecution x : p.getExecutions()) {
                     execs.add(Json.obj()
@@ -338,9 +347,11 @@ public final class McpService implements AutoCloseable {
                 : List.of(module(ps, module, dir));
         Set<String> reactorKeys = new LinkedHashSet<>();
         ps.modules().forEach(m -> reactorKeys.add(m.key()));
-        // groupId:artifactId:version -> modules declaring it
+        // groupId:artifactId:version -> modules declaring it, and where its version is set
         Map<String, List<String>> declared = new TreeMap<>();
         Map<String, List<String>> declaredPlugins = new TreeMap<>();
+        Map<String, Map<String, Object>> origins = new HashMap<>();
+        Map<String, List<String>> lines = new HashMap<>();
         for (Module m : targets) {
             if (m.effective() == null) {
                 continue;
@@ -355,24 +366,25 @@ public final class McpService implements AutoCloseable {
                 }
                 declared.computeIfAbsent(key + ":" + d.getVersion(), k -> new ArrayList<>())
                         .add(ps.rel(m.raw().dir()));
+                origins.putIfAbsent(key + ":" + d.getVersion(), versionOrigin(ps, m, null, d, lines));
             }
             if (m.effective().getBuild() != null) {
                 for (Plugin p : m.effective().getBuild().getPlugins()) {
                     if (p.getVersion() != null) {
+                        String key = p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion();
                         declaredPlugins
-                                .computeIfAbsent(
-                                        p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion(),
-                                        k -> new ArrayList<>())
+                                .computeIfAbsent(key, k -> new ArrayList<>())
                                 .add(ps.rel(m.raw().dir()));
+                        origins.putIfAbsent(key, versionOrigin(ps, m, null, p, lines));
                     }
                 }
             }
         }
         List<String> failed = new ArrayList<>();
         int[] upToDate = new int[1];
-        List<Map<String, Object>> outdated = outdated(declared, ps.context(), previews, failed, upToDate);
+        List<Map<String, Object>> outdated = outdated(declared, origins, ps.context(), previews, failed, upToDate);
         List<Map<String, Object>> outdatedPlugins =
-                outdated(declaredPlugins, ps.pluginContext(), previews, failed, upToDate);
+                outdated(declaredPlugins, origins, ps.pluginContext(), previews, failed, upToDate);
         return Json.write(Json.obj()
                 .with("checked", declared.size() + declaredPlugins.size())
                 .with("up_to_date", upToDate[0])
@@ -382,13 +394,18 @@ public final class McpService implements AutoCloseable {
                 .with(
                         "note",
                         "direct dependencies and plugins with versions as resolved in the effective model;"
-                                + " versions set via dependencyManagement or pluginManagement change in the"
-                                + " BOM or parent that manages them; only plugins declared in <build><plugins>"
-                                + " are checked, lifecycle plugins not declared there are not"));
+                                + " to upgrade, edit version_in, or property_in when the version is a property;"
+                                + " only plugins declared in <build><plugins> are checked, lifecycle plugins not"
+                                + " declared there are not"));
     }
 
     private static List<Map<String, Object>> outdated(
-            Map<String, List<String>> declared, Context ctx, boolean previews, List<String> failed, int[] upToDate) {
+            Map<String, List<String>> declared,
+            Map<String, Map<String, Object>> origins,
+            Context ctx,
+            boolean previews,
+            List<String> failed,
+            int[] upToDate) {
         // One metadata lookup per artifact, the slow part on a cold cache: run them side by side. Pool
         // threads inherit this thread's context class loader, which common-pool threads would not.
         ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, Math.min(8, declared.size())));
@@ -413,6 +430,7 @@ public final class McpService implements AutoCloseable {
                             .with("current", gav[2])
                             .with("candidates", c)
                             .with("modules", e.getValue().size() <= 5 ? e.getValue() : null));
+                    outdated.get(outdated.size() - 1).putAll(origins.getOrDefault(e.getKey(), Map.of()));
                 } catch (ToolException ex) {
                     failed.add(gav[0] + ":" + gav[1] + ": " + ex.getMessage());
                 }
@@ -719,6 +737,80 @@ public final class McpService implements AutoCloseable {
     }
 
     // ---- shared helpers ---------------------------------------------------------------------------------
+
+    private static final Pattern VERSION_PROPERTY = Pattern.compile("^[^<]*?\\$\\{([^}]+)}");
+
+    /**
+     * Where the version of a dependency or plugin is written: {@code version_in}, the POM (a reactor
+     * path, else groupId:artifactId:version of a parent or BOM), and when it is a property,
+     * {@code version_property} and {@code property_in}. A location in {@code own}'s POM is left out.
+     */
+    private static Map<String, Object> versionOrigin(
+            ProjectSession s, Module m, Module own, InputLocationTracker element, Map<String, List<String>> lines) {
+        Json.Obj o = Json.obj();
+        InputLocation loc = element.getLocation("version");
+        if (loc == null || loc.getSource() == null) {
+            return o;
+        }
+        if (own == null || !isPomOf(own, loc.getSource())) {
+            o.with("version_in", pomName(s, loc.getSource()));
+        }
+        String property = versionProperty(loc, lines);
+        if (property == null) {
+            return o;
+        }
+        o.with("version_property", property);
+        if (s.config().userProperties().containsKey(property)) {
+            return o.with("property_in", ".mvn/maven.config");
+        }
+        InputLocation props = m.effective().getLocation("properties");
+        InputLocation p = props != null ? props.getLocation(property) : null;
+        if (p != null && p.getSource() != null && (own == null || !isPomOf(own, p.getSource()))) {
+            o.with("property_in", pomName(s, p.getSource()));
+        }
+        return o;
+    }
+
+    private static boolean isPomOf(Module m, InputSource source) {
+        return source.getLocation() != null
+                && Path.of(source.getLocation())
+                        .toAbsolutePath()
+                        .normalize()
+                        .equals(m.raw().pom());
+    }
+
+    private static String pomName(ProjectSession s, InputSource source) {
+        if (source.getLocation() != null) {
+            Path pom = Path.of(source.getLocation()).toAbsolutePath().normalize();
+            if (pom.startsWith(s.root())) {
+                return s.rel(pom);
+            }
+        }
+        return source.getModelId();
+    }
+
+    /** The property a {@code <version>} element starts with, read from the POM right after its start tag. */
+    private static String versionProperty(InputLocation loc, Map<String, List<String>> lines) {
+        String file = loc.getSource().getLocation();
+        if (file == null || loc.getLineNumber() <= 0) {
+            return null;
+        }
+        List<String> text = lines.computeIfAbsent(file, f -> {
+            try {
+                return Files.readAllLines(Path.of(f), StandardCharsets.UTF_8);
+            } catch (IOException | RuntimeException e) {
+                return List.of();
+            }
+        });
+        if (loc.getLineNumber() > text.size()) {
+            return null;
+        }
+        // shortcut: only the start tag's line is read, so a version on the next line shows no property
+        String line = text.get(loc.getLineNumber() - 1);
+        String rest = line.substring(Math.max(0, Math.min(line.length(), loc.getColumnNumber() - 1)));
+        Matcher matcher = VERSION_PROPERTY.matcher(rest);
+        return matcher.find() ? matcher.group(1) : null;
+    }
 
     private CollectResult collect(ProjectSession s, Module m, Scope scope) {
         Model e = m.effective();

@@ -46,6 +46,12 @@ final class DemoReactor {
         library("pluginx", List.of("1.0", "2.0"), null);
         library("eu.maveniverse.maven.mimir", "extension3", List.of("0.3.5", "0.3.6", "0.4.0-RC1"), null);
         sourcesJar("liba", "1.0");
+        write(
+                repo.resolve("com/acme/lib/acme-bom/1.0/acme-bom-1.0.pom"),
+                "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme.lib</groupId>"
+                        + "<artifactId>acme-bom</artifactId><version>1.0</version><packaging>pom</packaging>"
+                        + "<dependencyManagement><dependencies>" + dep("libe", "1.0", null)
+                        + "</dependencies></dependencyManagement></project>");
 
         Path m2 = Path.of(System.getProperty("user.home")).resolve(".m2");
         deleteRecursively(m2.resolve("repository"));
@@ -62,7 +68,7 @@ final class DemoReactor {
                   <version>${revision}</version>
                   <packaging>pom</packaging>
                   <modules><module>core</module><module>app</module></modules>
-                  <properties><revision>0.0.0</revision></properties>
+                  <properties><revision>0.0.0</revision><libb.version>1.0</libb.version></properties>
                   <repositories>
                     <repository><id>demo</id><url>%1$s</url></repository>
                   </repositories>
@@ -72,13 +78,15 @@ final class DemoReactor {
                   <dependencyManagement>
                     <dependencies>
                       <dependency><groupId>com.acme.lib</groupId><artifactId>libd</artifactId><version>1.0</version></dependency>
+                      <dependency><groupId>com.acme.lib</groupId><artifactId>acme-bom</artifactId><version>1.0</version><type>pom</type><scope>import</scope></dependency>
                     </dependencies>
                   </dependencyManagement>
                 </project>
                 """.formatted(repo.toUri()));
         module(
                 "core",
-                "<dependencies>" + dep("liba", "1.0", null) + dep("libb", "1.0", null) + dep("libe", "1.0", null)
+                "<dependencies>" + dep("liba", "1.0", null) + dep("libb", "${libb.version}", null)
+                        + dep("libe", null, null)
                         + "</dependencies>"
                         + "<build><plugins><plugin><groupId>com.acme.lib</groupId><artifactId>pluginx</artifactId>"
                         + "<version>1.0</version></plugin></plugins></build>");
@@ -107,8 +115,9 @@ final class DemoReactor {
     }
 
     private static String dep(String artifactId, String version, String scope) {
-        return "<dependency><groupId>com.acme.lib</groupId><artifactId>" + artifactId + "</artifactId><version>"
-                + version + "</version>" + (scope != null ? "<scope>" + scope + "</scope>" : "") + "</dependency>";
+        return "<dependency><groupId>com.acme.lib</groupId><artifactId>" + artifactId + "</artifactId>"
+                + (version != null ? "<version>" + version + "</version>" : "")
+                + (scope != null ? "<scope>" + scope + "</scope>" : "") + "</dependency>";
     }
 
     /** One library with the given releases; each release depends on {@code dependency} (artifactId:version[:scope]). */

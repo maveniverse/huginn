@@ -51,7 +51,7 @@ final class ProjectModels {
         request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
         request.setProcessPlugins(false);
         request.setTwoPhaseBuilding(false);
-        request.setLocationTracking(false);
+        request.setLocationTracking(true); // tells which POM sets a version: see McpService.versionOrigin
         request.setPomFile(pom.toFile());
         request.setSystemProperties(properties(session.getSystemProperties()));
         request.setUserProperties(properties(session.getUserProperties()));

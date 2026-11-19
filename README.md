@@ -10,10 +10,10 @@ There are seven tools, all read-only. Every one takes an optional `project` (any
 
 | Tool | Answers |
 |---|---|
-| `describe` | At the root: modules, inter-module dependencies, repositories in use, `maven.config` settings. For a module: its effective model, with dependencies, plugins and executions, properties and profiles. |
+| `describe` | At the root: modules, inter-module dependencies, repositories in use, `maven.config` settings. For a module: its effective model, with dependencies, plugins and executions, properties and profiles, and **where each version is set**: the parent or BOM (`version_in`) and the property behind it (`version_property`, `property_in`). |
 | `dependencies` | The resolved tree, as the build sees it, plus **conflicts**: which version was requested by whom, and which one won. `scope` is compile, runtime or test; `maxDepth` caps output on large trees. |
 | `why` | Every path that brings an artifact in, **including requests that lost a conflict**, across all modules by default. One call answers both "why is X here" and "who wants the old X". |
-| `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Works for plugins too, using the project's plugin repositories. Without an artifact it lists outdated direct dependencies and plugins. |
+| `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Works for plugins too, using the project's plugin repositories. Without an artifact it lists outdated direct dependencies and plugins, each with the POM or property to edit. |
 | `search` | Maven Central search by text or `g:`/`a:` query, paged with `limit` and `page`. |
 | `sources` | Unpacks a dependency's sources jar into `~/.cache/huginn/sources/`, or returns one class's source. Without a version, uses the version this project resolves. |
 | `extensions` | Which core extensions are declared in the project (`.mvn/extensions.xml`), user (`~/.m2/extensions.xml`) and installation (`$MAVEN_HOME/conf/extensions.xml`) files, and which useful ones are missing (MWM, Mimir, Nisse, Muninn), each with its latest release from the project's repositories and the exact `<extension>` snippet to add. Missing ones are proposed user-wide, and Maven 3.10.x is recommended. It changes nothing; applying the snippet is up to the agent. |

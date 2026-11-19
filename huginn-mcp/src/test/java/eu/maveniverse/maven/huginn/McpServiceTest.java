@@ -76,6 +76,20 @@ class McpServiceTest {
     }
 
     @Test
+    void describeTellsWhereAVersionIsSet() {
+        String json = service.describe(null, "core");
+        assertContains(
+                json,
+                // a property defined in the parent POM
+                "\"id\":\"com.acme.lib:libb:1.0\",\"version_property\":\"libb.version\",\"property_in\":\"pom.xml\"",
+                // managed by a BOM the parent imports
+                "\"id\":\"com.acme.lib:libe:1.0\",\"version_in\":\"com.acme.lib:acme-bom:1.0\"");
+        // written in the module's own POM: nothing to add
+        assertContains(json, "{\"id\":\"com.acme.lib:liba:1.0\"}");
+        assertContains(service.describe(null, "app"), "\"id\":\"com.acme.lib:libd:1.0\",\"version_in\":\"pom.xml\"");
+    }
+
+    @Test
     void moduleSelectorAcceptsPathArtifactIdAndGa() {
         for (String selector : new String[] {"app", "com.acme:app"}) {
             assertContains(service.describe(null, selector), "\"module\":\"app\"");
@@ -194,7 +208,12 @@ class McpServiceTest {
     @Test
     void versionsWithoutArtifactListOutdatedDirectDependencies() {
         String json = service.versions(null, null, null, null);
-        assertContains(json, "\"artifact\":\"com.acme.lib:liba\"", "\"current\":\"1.0\"", "\"latest\":\"2.0\"");
+        assertContains(
+                json,
+                "\"artifact\":\"com.acme.lib:liba\"",
+                "\"current\":\"1.0\"",
+                "\"latest\":\"2.0\"",
+                "\"version_in\":\"core/pom.xml\"");
         assertFalse(json.contains("\"artifact\":\"com.acme.lib:libb\""), json); // already the newest
         assertFalse(json.contains("com.acme:core"), json); // reactor modules are not upgrade candidates
     }
