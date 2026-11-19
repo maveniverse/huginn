@@ -74,8 +74,13 @@ public class HuginnTools {
                             description =
                                     "Maximum tree depth; deeper dependencies are counted, not listed (default: all)",
                             required = false)
-                    Integer maxDepth) {
-        return call(() -> service.dependencies(project, module, scope, maxDepth));
+                    Integer maxDepth,
+            @ToolArg(
+                            description = "groupId:artifactId:version to force, as dependencyManagement would; returns"
+                                    + " what changes on the classpath instead of the tree",
+                            required = false)
+                    String override) {
+        return call(() -> service.dependencies(project, module, scope, maxDepth, override));
     }
 
     @Tool(

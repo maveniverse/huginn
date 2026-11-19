@@ -315,12 +315,15 @@ public final class McpService implements AutoCloseable {
 
     // ---- dependencies ---------------------------------------------------------------------------------
 
-    public String dependencies(String project, String module, String scope, Integer maxDepth) {
+    public String dependencies(String project, String module, String scope, Integer maxDepth, String override) {
         Path dir = dir(project);
         ProjectSession s = session(dir);
         Module m = requireBuildableModule(s, module, dir);
         Scope rs = scope(scope);
-        CollectResult cr = collect(s, m, rs);
+        if (override != null && !override.isBlank()) {
+            return whatIf(s, m, rs, override.trim());
+        }
+        CollectResult cr = collect(s, m, rs, null);
         Graphs.Tree t = Graphs.tree(cr.getRoot(), maxDepth == null ? 0 : Math.max(0, maxDepth));
         return Json.write(Json.obj()
                 .with("module", s.rel(m.raw().dir()))
@@ -331,6 +334,49 @@ public final class McpService implements AutoCloseable {
                 .with("hidden_deps", t.truncated > 0 ? t.truncated : null)
                 .with("conflicts", new ArrayList<>(t.conflicts.values()))
                 .with("errors", errors(cr)));
+    }
+
+    /** What changes on the classpath when one artifact is forced to a version, as dependencyManagement would. */
+    private String whatIf(ProjectSession s, Module m, Scope rs, String override) {
+        String[] gav = override.split(":");
+        if (gav.length != 3) {
+            throw new ToolException("override must be groupId:artifactId:version");
+        }
+        Artifact forced = new DefaultArtifact(gav[0], gav[1], "jar", gav[2]);
+        Map<String, String> before = Graphs.selected(collect(s, m, rs, null).getRoot());
+        CollectResult cr = collect(s, m, rs, forced);
+        Map<String, String> after = Graphs.selected(cr.getRoot());
+        List<Map<String, Object>> changed = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        before.forEach((k, v) -> {
+            String now = after.get(k);
+            if (now == null) {
+                removed.add(k + ":" + v);
+            } else if (!now.equals(v)) {
+                changed.add(Json.obj().with("artifact", k).with("from", v).with("to", now));
+            }
+        });
+        List<String> added = new ArrayList<>();
+        after.forEach((k, v) -> {
+            if (!before.containsKey(k)) {
+                added.add(k + ":" + v);
+            }
+        });
+        Graphs.Tree t = Graphs.tree(cr.getRoot(), 0);
+        return Json.write(Json.obj()
+                .with("module", s.rel(m.raw().dir()))
+                .with("scope", rs.name().toLowerCase())
+                .with("override", override)
+                .with("changed", changed)
+                .with("added", added)
+                .with("removed", removed)
+                .with("conflicts", new ArrayList<>(t.conflicts.values()))
+                .with("errors", errors(cr))
+                .with(
+                        "hint",
+                        changed.isEmpty() && added.isEmpty() && removed.isEmpty()
+                                ? "nothing changes: not a dependency of this module, or already at that version"
+                                : "to apply it, set the version in dependencyManagement (or the dependency itself)"));
     }
 
     // ---- why ---------------------------------------------------------------------------------------------
@@ -356,7 +402,7 @@ public final class McpService implements AutoCloseable {
         List<Map<String, Object>> found = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         for (Module m : targets) {
-            CollectResult cr = collect(s, m, rs);
+            CollectResult cr = collect(s, m, rs, null);
             List<Map<String, Object>> paths = Graphs.paths(cr.getRoot(), matcher, MAX_PATHS_PER_MODULE);
             if (!paths.isEmpty()) {
                 found.add(Json.obj().with("module", s.rel(m.raw().dir())).with("paths", paths));
@@ -899,7 +945,7 @@ public final class McpService implements AutoCloseable {
             if (m.effective() == null || m.effective().getDependencies().isEmpty()) {
                 continue;
             }
-            CollectResult cr = collect(s, m, Scope.TEST);
+            CollectResult cr = collect(s, m, Scope.TEST, null);
             Optional<String> v = findSelected(cr.getRoot(), matcher, new LinkedHashSet<>());
             if (v.isPresent()) {
                 return v;
@@ -1003,11 +1049,18 @@ public final class McpService implements AutoCloseable {
         return matcher.find() ? matcher.group(1) : null;
     }
 
-    private CollectResult collect(ProjectSession s, Module m, Scope scope) {
+    /** @param forced nullable: an artifact whose version wins everywhere, direct and transitive */
+    private CollectResult collect(ProjectSession s, Module m, Scope scope, Artifact forced) {
         Model e = m.effective();
         List<Dependency> deps = Models.dependencies(e, s.types()).stream()
                 .filter(d -> scope.direct.contains(d.getScope().isEmpty() ? "compile" : d.getScope()))
+                .map(d -> force(d, forced))
                 .toList();
+        List<Dependency> managed = new ArrayList<>();
+        if (forced != null) {
+            managed.add(new Dependency(forced, null)); // first entry wins over the project's own
+        }
+        Models.managedDependencies(e, s.types()).forEach(d -> managed.add(force(d, forced)));
         try {
             // verbose: conflict losers stay in the graph, so 'why' can show who asked for what
             DefaultRepositorySystemSession session =
@@ -1017,7 +1070,7 @@ public final class McpService implements AutoCloseable {
             CollectRequest request = new CollectRequest();
             request.setRootArtifact(m.artifact());
             request.setDependencies(deps);
-            request.setManagedDependencies(Models.managedDependencies(e, s.types()));
+            request.setManagedDependencies(managed);
             request.setRepositories(s.context().remoteRepositories());
             CollectResult result = s.context().repositorySystem().collectDependencies(session, request);
             prune(result.getRoot(), scope.direct, Collections.newSetFromMap(new IdentityHashMap<>()));
@@ -1031,6 +1084,15 @@ public final class McpService implements AutoCloseable {
             throw new ToolException(
                     "cannot collect dependencies of " + s.rel(m.raw().dir()) + ": " + rootMessage(ex), ex);
         }
+    }
+
+    private static Dependency force(Dependency d, Artifact forced) {
+        Artifact a = d.getArtifact();
+        return forced != null
+                        && forced.getGroupId().equals(a.getGroupId())
+                        && forced.getArtifactId().equals(a.getArtifactId())
+                ? d.setArtifact(a.setVersion(forced.getVersion()))
+                : d;
     }
 
     /**
