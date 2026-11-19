@@ -371,8 +371,8 @@ public final class McpService implements AutoCloseable {
                         "note",
                         "direct dependencies and plugins with versions as resolved in the effective model;"
                                 + " versions set via dependencyManagement or pluginManagement change in the"
-                                + " BOM or parent that manages them; plugins bound by Maven's lifecycle are"
-                                + " listed too"));
+                                + " BOM or parent that manages them; only plugins declared in <build><plugins>"
+                                + " are checked, lifecycle plugins not declared there are not"));
     }
 
     private static List<Map<String, Object>> outdated(
