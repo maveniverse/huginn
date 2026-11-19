@@ -10,7 +10,7 @@ There are eight tools, all read-only. Every one takes an optional `project` (any
 
 | Tool | Answers |
 |---|---|
-| `describe` | At the root: modules, inter-module dependencies, repositories in use, `maven.config` settings. For a module: its effective model, with dependencies, plugins and executions, properties and profiles, and **where each version is set**: the parent or BOM (`version_in`) and the property behind it (`version_property`, `property_in`). |
+| `describe` | At the root: modules, inter-module dependencies, repositories in use, `maven.config` settings. For a module: its effective model, with dependencies, plugins and executions, properties and profiles, and **where each version is set**: the parent or BOM (`version_in`) and the property behind it (`version_property`, `property_in`). With `plugin`, that plugin's configuration and executions in the module. |
 | `dependencies` | The resolved tree, as the build sees it, plus **conflicts**: which version was requested by whom, and which one won. `scope` is compile, runtime or test; `maxDepth` caps output on large trees. |
 | `why` | Every path that brings an artifact in, **including requests that lost a conflict**, across all modules by default. One call answers both "why is X here" and "who wants the old X". |
 | `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Works for plugins too, using the project's plugin repositories. Without an artifact it lists outdated direct dependencies and plugins, each with the POM or property to edit. |

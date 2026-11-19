@@ -47,6 +47,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.apache.maven.model.Build;
 import org.apache.maven.model.InputLocation;
 import org.apache.maven.model.InputLocationTracker;
 import org.apache.maven.model.InputSource;
@@ -107,9 +108,12 @@ public final class McpService implements AutoCloseable {
 
     // ---- describe -----------------------------------------------------------------------------------
 
-    public String describe(String project, String module) {
+    public String describe(String project, String module, String plugin) {
         Path dir = dir(project);
         ProjectSession s = session(dir);
+        if (plugin != null && !plugin.isBlank()) {
+            return Json.write(pluginDetail(s, module(s, module, dir), plugin.trim()));
+        }
         boolean atRoot = (module == null || module.isBlank()) && dir.equals(s.root());
         if (atRoot && s.modules().size() > 1) {
             return Json.write(overview(s));
@@ -242,6 +246,71 @@ public final class McpService implements AutoCloseable {
                         .map(r -> Json.obj().with("id", r.getId()).with("url", r.getUrl()))
                         .toList());
         return o;
+    }
+
+    /**
+     * One plugin as the module's effective model configures it. Executions are listed with their own
+     * configuration; Maven merges each over the plugin's configuration when it runs them.
+     */
+    private Map<String, Object> pluginDetail(ProjectSession s, Module m, String selector) {
+        if (m.effective() == null) {
+            throw new ToolException("module " + s.rel(m.raw().dir()) + " has an invalid model: " + m.problem());
+        }
+        Predicate<Plugin> matches = pluginMatcher(selector.split(":"));
+        Build build = m.effective().getBuild();
+        boolean managedOnly = false;
+        Optional<Plugin> found = build == null
+                ? Optional.empty()
+                : build.getPlugins().stream().filter(matches).findFirst();
+        if (found.isEmpty() && build != null && build.getPluginManagement() != null) {
+            found = build.getPluginManagement().getPlugins().stream()
+                    .filter(matches)
+                    .findFirst();
+            managedOnly = found.isPresent();
+        }
+        Plugin p = found.orElseThrow(() -> new ToolException("plugin '" + selector + "' is not configured in "
+                + s.rel(m.raw().dir()) + "; configured: "
+                + (build == null
+                        ? "none"
+                        : build.getPlugins().stream().map(Plugin::getArtifactId).collect(Collectors.joining(", ")))));
+        Json.Obj o = Json.obj()
+                .with("module", s.rel(m.raw().dir()))
+                .with("plugin", p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion());
+        o.putAll(versionOrigin(s, m, m, p, new HashMap<>()));
+        o.with("managed_only", managedOnly ? Boolean.TRUE : null)
+                .with("configuration", xml(p.getConfiguration()))
+                .with(
+                        "executions",
+                        p.getExecutions().stream()
+                                .map(x -> Json.obj()
+                                        .with("id", x.getId())
+                                        .with("phase", x.getPhase())
+                                        .with("goals", x.getGoals())
+                                        .with("configuration", xml(x.getConfiguration())))
+                                .toList())
+                .with(
+                        "dependencies",
+                        p.getDependencies().stream()
+                                .map(d -> d.getGroupId() + ":" + d.getArtifactId() + ":" + d.getVersion())
+                                .toList());
+        if (managedOnly) {
+            o.with(
+                    "note",
+                    "only in pluginManagement: applies whenever the plugin runs in this module, also when the packaging's lifecycle binds it");
+        } else if (!p.getExecutions().isEmpty()) {
+            o.with("note", "each execution's configuration is merged over the plugin's configuration");
+        }
+        return o;
+    }
+
+    /** XML text of a configuration DOM, or null when there is none. */
+    private static String xml(Object configuration) {
+        return configuration == null
+                ? null
+                : configuration
+                        .toString()
+                        .replaceFirst("^<\\?xml[^>]*\\?>\\s*", "")
+                        .trim();
     }
 
     // ---- dependencies ---------------------------------------------------------------------------------
@@ -786,12 +855,7 @@ public final class McpService implements AutoCloseable {
      * {@code name-maven-plugin}.
      */
     private Optional<Plugin> projectPlugin(ProjectSession s, String module, Path dir, String[] parts) {
-        String name = parts[0];
-        Predicate<Plugin> matches = parts.length >= 2
-                ? p -> parts[0].equals(p.getGroupId()) && parts[1].equals(p.getArtifactId())
-                : p -> p.getArtifactId().equals(name)
-                        || p.getArtifactId().equals("maven-" + name + "-plugin")
-                        || p.getArtifactId().equals(name + "-maven-plugin");
+        Predicate<Plugin> matches = pluginMatcher(parts);
         List<Module> candidates = new ArrayList<>();
         candidates.add(module(s, module, dir));
         s.modules().stream().filter(m -> !candidates.contains(m)).forEach(candidates::add);
@@ -810,6 +874,15 @@ public final class McpService implements AutoCloseable {
             }
         }
         return Optional.empty();
+    }
+
+    private static Predicate<Plugin> pluginMatcher(String[] parts) {
+        String name = parts[0];
+        return parts.length >= 2
+                ? p -> parts[0].equals(p.getGroupId()) && parts[1].equals(p.getArtifactId())
+                : p -> p.getArtifactId().equals(name)
+                        || p.getArtifactId().equals("maven-" + name + "-plugin")
+                        || p.getArtifactId().equals(name + "-maven-plugin");
     }
 
     /** The version the project actually ends up with: declared, managed, or selected in the graph. */

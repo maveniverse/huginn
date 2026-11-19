@@ -90,7 +90,10 @@ final class DemoReactor {
                         + dep("libe", null, null)
                         + "</dependencies>"
                         + "<build><plugins><plugin><groupId>com.acme.lib</groupId><artifactId>pluginx</artifactId>"
-                        + "<version>1.0</version></plugin></plugins></build>");
+                        + "<version>1.0</version><configuration><skip>true</skip></configuration><executions><execution>"
+                        + "<id>e1</id><phase>verify</phase><goals><goal>run</goal></goals>"
+                        + "<configuration><count>3</count></configuration></execution></executions></plugin>"
+                        + "</plugins></build>");
         write(root.resolve("app/pom.xml"), """
                 <project>
                   <modelVersion>4.0.0</modelVersion>

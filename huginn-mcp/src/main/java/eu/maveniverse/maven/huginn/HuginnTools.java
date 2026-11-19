@@ -39,7 +39,7 @@ public class HuginnTools {
     @Tool(
             description = "Describe the Maven project: at the reactor root, its modules, how they depend on each"
                     + " other and the repositories in use; for one module, its effective model (dependencies,"
-                    + " plugins, properties, profiles).",
+                    + " plugins, properties, profiles), or with plugin, that plugin's configuration.",
             annotations =
                     @Annotations(
                             readOnlyHint = true,
@@ -48,8 +48,13 @@ public class HuginnTools {
                             openWorldHint = false))
     String describe(
             @ToolArg(description = PROJECT, required = false) String project,
-            @ToolArg(description = MODULE, required = false) String module) {
-        return call(() -> service.describe(project, module));
+            @ToolArg(description = MODULE, required = false) String module,
+            @ToolArg(
+                            description = "Plugin to show the configuration and executions of: groupId:artifactId, or"
+                                    + " a short name such as 'surefire'",
+                            required = false)
+                    String plugin) {
+        return call(() -> service.describe(project, module, plugin));
     }
 
     @Tool(
