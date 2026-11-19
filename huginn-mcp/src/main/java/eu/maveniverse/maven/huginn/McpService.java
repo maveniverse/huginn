@@ -779,19 +779,19 @@ public final class McpService implements AutoCloseable {
     private ProjectSession session(Path dir) {
         try {
             return sessions.forPath(dir);
-        } catch (IOException e) {
-            throw new ToolException("no Maven project at " + dir + ": " + rootMessage(e), e);
-        } catch (RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             throw new ToolException("cannot load the Maven project at " + dir + ": " + rootMessage(e), e);
         }
     }
 
+    /** Empty only when there is no project at all; a project that fails to load is an error, not "no project". */
     private Optional<ProjectSession> optionalSession(Path dir) {
-        try {
-            return Optional.of(sessions.forPath(dir));
-        } catch (Exception e) {
-            return Optional.empty();
+        for (Path p = dir; p != null; p = p.getParent()) {
+            if (Files.isRegularFile(p.resolve("pom.xml"))) {
+                return Optional.of(session(dir));
+            }
         }
+        return Optional.empty();
     }
 
     private Module module(ProjectSession s, String selector, Path cwd) {

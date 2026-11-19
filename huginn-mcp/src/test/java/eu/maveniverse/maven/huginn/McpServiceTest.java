@@ -355,6 +355,16 @@ class McpServiceTest {
     }
 
     @Test
+    void aBrokenRootPomIsAnErrorNotNoProject() throws IOException {
+        Path proj = tmp.resolve("broken-root");
+        DemoReactor.write(proj.resolve(".mvn/maven.config"), "");
+        DemoReactor.write(proj.resolve("pom.xml"), "<project><modelVersion>4.0.0</modelVersion>");
+        ToolException e = assertThrows(
+                ToolException.class, () -> service.sources(proj.toString(), null, "com.acme.lib:liba", null));
+        assertContains(e.getMessage(), "cannot load the Maven project");
+    }
+
+    @Test
     void settingsFromMavenConfigApply() throws IOException {
         Path proj = tmp.resolve("with-settings");
         DemoReactor.write(proj.resolve(".mvn/maven.config"), "-s .mvn/settings.xml\n");
