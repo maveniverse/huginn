@@ -9,10 +9,14 @@ package eu.maveniverse.maven.huginn.support;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -45,13 +49,42 @@ public final class Sources {
             throw new IOException("invalid coordinates " + groupId + ":" + artifactId + ":" + version);
         }
         Path complete = dir.resolve(COMPLETE);
-        if (Files.isRegularFile(complete)) {
-            if (Files.getLastModifiedTime(complete).compareTo(Files.getLastModifiedTime(jar)) >= 0) {
-                return dir;
-            }
-            deleteRecursively(dir); // a newer jar: drop what it no longer has
+        if (fresh(complete, jar)) {
+            return dir;
         }
-        Files.createDirectories(dir);
+        // Other huginn processes share this cache: unpack under a file lock, so a second process waits
+        // and then reuses the result instead of writing over it. synchronized keeps threads of this
+        // process apart, which a file lock does not.
+        synchronized (Sources.class) {
+            Files.createDirectories(dir.getParent());
+            try (FileChannel channel = FileChannel.open(
+                            dir.resolveSibling(dir.getFileName() + ".lock"),
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.WRITE);
+                    FileLock lock = channel.lock()) {
+                if (fresh(complete, jar)) {
+                    return dir;
+                }
+                if (Files.exists(dir)) {
+                    deleteRecursively(dir); // a newer jar, or a leftover of an interrupted unpack
+                }
+                Files.createDirectories(dir);
+                unzip(jar, dir);
+                Files.writeString(complete, jar.toString());
+            }
+        }
+        return dir;
+    }
+
+    private static boolean fresh(Path complete, Path jar) throws IOException {
+        try {
+            return Files.getLastModifiedTime(complete).compareTo(Files.getLastModifiedTime(jar)) >= 0;
+        } catch (NoSuchFileException e) {
+            return false;
+        }
+    }
+
+    private static void unzip(Path jar, Path dir) throws IOException {
         Path normalized = dir.toAbsolutePath().normalize();
         try (InputStream in = Files.newInputStream(jar);
                 ZipInputStream zip = new ZipInputStream(in, StandardCharsets.UTF_8)) {
@@ -69,8 +102,6 @@ public final class Sources {
                 }
             }
         }
-        Files.writeString(dir.resolve(COMPLETE), jar.toString());
-        return dir;
     }
 
     private static void deleteRecursively(Path dir) throws IOException {
