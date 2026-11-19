@@ -124,8 +124,9 @@ public class HuginnTools {
     }
 
     @Tool(
-            description = "Search Maven Central for artifacts by name or coordinates, e.g. 'jackson databind' or"
-                    + " 'g:com.fasterxml.jackson.core a:jackson-databind'.",
+            description = "Search Maven Central for artifacts by name, coordinates or class, e.g. 'jackson databind',"
+                    + " 'g:com.fasterxml.jackson.core a:jackson-databind', or 'fc:<fully qualified class name>' to"
+                    + " find which artifact has a class.",
             annotations =
                     @Annotations(
                             readOnlyHint = true,
@@ -133,7 +134,7 @@ public class HuginnTools {
                             idempotentHint = true,
                             openWorldHint = true))
     String search(
-            @ToolArg(description = "Search text or g:/a:/v: query") String query,
+            @ToolArg(description = "Search text, or a g:/a:/v:/fc: query; terms combine with AND") String query,
             @ToolArg(description = "Results per page (default 20, max 100)", required = false) Integer limit,
             @ToolArg(
                             description = "Zero-based page number, for more results when 'more' is true (default 0)",

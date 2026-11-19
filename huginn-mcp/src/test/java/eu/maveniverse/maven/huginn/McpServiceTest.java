@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -384,6 +385,13 @@ class McpServiceTest {
         assertEquals("g:com.google.guava", McpService.centralQuery("g:com.google.guava"));
         assertEquals("a:guava", McpService.centralQuery(" a:guava "));
         assertEquals("jackson AND databind", McpService.centralQuery("jackson databind"));
+    }
+
+    @Test
+    void searchResultsKeepTheNewestVersionPerArtifact() {
+        assertEquals(
+                List.of("a:x:1.10", "b:y:2.0"),
+                McpService.newestPerArtifact(List.of("a:x:1.9", "b:y:2.0", "a:x:1.10", "a:x:1.10-RC1")));
     }
 
     // ---- reload -------------------------------------------------------------------------------------

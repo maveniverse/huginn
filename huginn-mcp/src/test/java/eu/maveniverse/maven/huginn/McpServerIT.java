@@ -188,6 +188,18 @@ class McpServerIT {
         }
     }
 
+    /** Class search lists every version of every jar with the class; one entry per artifact is kept. */
+    @Test
+    void searchFindsWhichArtifactHasAClass() throws IOException {
+        JsonNode results = search("fc:org.slf4j.LoggerFactory g:org.slf4j");
+        assertTrue(results.toString().contains("org.slf4j:slf4j-api:"), results.toString());
+        Set<String> artifacts = new TreeSet<>();
+        for (JsonNode r : results) {
+            String id = r.asText();
+            assertTrue(artifacts.add(id.substring(0, id.lastIndexOf(':'))), results.toString());
+        }
+    }
+
     /** Central rejects terms separated by a bare space; free text must still get answers. */
     @Test
     void searchTakesFreeText() throws IOException {

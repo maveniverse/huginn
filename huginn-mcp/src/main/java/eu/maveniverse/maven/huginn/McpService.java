@@ -77,6 +77,8 @@ import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.VersionRangeRequest;
 import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
 import org.eclipse.aether.util.graph.transformer.ConflictResolver;
+import org.eclipse.aether.util.version.GenericVersionScheme;
+import org.eclipse.aether.version.InvalidVersionSpecificationException;
 import org.eclipse.aether.version.Version;
 
 /**
@@ -89,6 +91,7 @@ public final class McpService implements AutoCloseable {
     private static final int MAX_PROPERTIES = 80;
     private static final int MAX_PATHS_PER_MODULE = 10;
     private static final int MAX_SOURCE_CHARS = 60_000;
+    private static final GenericVersionScheme VERSION_SCHEME = new GenericVersionScheme();
 
     private final ProjectSessions sessions = new ProjectSessions();
     private final Path defaultDir;
@@ -626,26 +629,57 @@ public final class McpService implements AutoCloseable {
         }
         int max = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
         int pageNo = page == null ? 0 : Math.max(0, page);
+        // A class search returns one record per version, so fetch more records and keep one per artifact.
+        // shortcut: past `limit` artifacts the rest of those records are not shown; a larger limit shows them
+        boolean classSearch = query.matches("(?s).*\\b(fc|c):.*");
+        int fetch = classSearch ? 200 : max;
         try (SearchBackend backend = SmoSearchBackendFactory.createCsc(new Java11HttpClientTransport())) {
             SearchResponse response =
-                    backend.search(new SearchRequest(new Paging(max, pageNo), Query.query(centralQuery(query))));
+                    backend.search(new SearchRequest(new Paging(fetch, pageNo), Query.query(centralQuery(query))));
             List<String> ids = new ArrayList<>();
             for (Record r : response.getPage()) {
-                if (ids.size() >= max) {
-                    break;
-                }
                 ids.add(r.getValue(MAVEN.GROUP_ID) + ":" + r.getValue(MAVEN.ARTIFACT_ID) + ":"
                         + r.getValue(MAVEN.VERSION));
             }
+            List<String> results = newestPerArtifact(ids);
             return Json.write(Json.obj()
                     .with("query", query)
                     .with("total_hits", response.getTotalHits())
                     .with("page", pageNo)
-                    .with("more", (long) (pageNo + 1) * max < response.getTotalHits() ? Boolean.TRUE : null)
-                    .with("results", ids)
-                    .with("note", "Maven Central only; use versions for the project's own repositories"));
+                    .with(
+                            "more",
+                            (long) (pageNo + 1) * fetch < response.getTotalHits() || results.size() > max
+                                    ? Boolean.TRUE
+                                    : null)
+                    .with("results", results.size() > max ? results.subList(0, max) : results)
+                    .with(
+                            "note",
+                            classSearch
+                                    ? "class search: every jar containing the class, shaded copies included,"
+                                            + " sorted by artifactId; add g:<groupId> to narrow"
+                                    : "Maven Central only; use versions for the project's own repositories"));
         } catch (IOException e) {
             throw new ToolException("search failed: " + rootMessage(e), e);
+        }
+    }
+
+    /** One entry per groupId:artifactId, with its newest version: class searches return every version. */
+    static List<String> newestPerArtifact(List<String> gavs) {
+        Map<String, String> newest = new LinkedHashMap<>();
+        for (String gav : gavs) {
+            int colon = gav.lastIndexOf(':');
+            newest.merge(gav.substring(0, colon), gav.substring(colon + 1), (a, b) -> newer(a, b));
+        }
+        return newest.entrySet().stream()
+                .map(e -> e.getKey() + ":" + e.getValue())
+                .toList();
+    }
+
+    private static String newer(String a, String b) {
+        try {
+            return VERSION_SCHEME.parseVersion(a).compareTo(VERSION_SCHEME.parseVersion(b)) >= 0 ? a : b;
+        } catch (InvalidVersionSpecificationException e) {
+            return a;
         }
     }
 
