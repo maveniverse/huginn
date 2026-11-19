@@ -342,7 +342,8 @@ public final class ProjectSession implements AutoCloseable {
         baseContext.close();
     }
 
-    static String rootMessage(Throwable t) {
+    /** The innermost non-blank message, all lines: a model problem lists its details below the first. */
+    public static String rootMessage(Throwable t) {
         String msg = null;
         for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
             if (c.getMessage() != null && !c.getMessage().isBlank()) {

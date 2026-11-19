@@ -874,14 +874,10 @@ public final class McpService implements AutoCloseable {
         return standaloneContext;
     }
 
+    /** First line only: a tool error should read as one sentence. */
     static String rootMessage(Throwable t) {
-        String msg = null;
-        for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
-            if (c.getMessage() != null && !c.getMessage().isBlank()) {
-                msg = c.getMessage();
-            }
-        }
-        return msg != null ? msg.lines().findFirst().orElse(msg) : t.getClass().getSimpleName();
+        String msg = ProjectSession.rootMessage(t);
+        return msg.lines().findFirst().orElse(msg);
     }
 
     @Override
