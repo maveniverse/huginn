@@ -158,13 +158,12 @@ final class ProfileActivation {
         String family = negate ? wanted.substring(1) : wanted;
         boolean windows = osName.startsWith("windows");
         boolean mac = osName.contains("mac");
-        boolean matches =
-                switch (family) {
-                    case "windows" -> windows;
-                    case "mac" -> mac;
-                    case "unix" -> !windows;
-                    default -> osName.startsWith(family);
-                };
+        boolean matches = switch (family) {
+            case "windows" -> windows;
+            case "mac" -> mac;
+            case "unix" -> !windows;
+            default -> osName.startsWith(family);
+        };
         return matches != negate;
     }
 
