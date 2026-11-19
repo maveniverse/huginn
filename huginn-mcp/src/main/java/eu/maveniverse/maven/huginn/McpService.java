@@ -36,6 +36,10 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -385,26 +389,49 @@ public final class McpService implements AutoCloseable {
 
     private static List<Map<String, Object>> outdated(
             Map<String, List<String>> declared, Context ctx, boolean previews, List<String> failed, int[] upToDate) {
-        List<Map<String, Object>> outdated = new ArrayList<>();
-        for (Map.Entry<String, List<String>> e : declared.entrySet()) {
-            String[] gav = e.getKey().split(":");
-            try {
-                Map<String, Object> c = Versions.candidates(
-                        gav[2], newerVersions(ctx, ctx.remoteRepositories(), gav[0], gav[1], gav[2]), previews);
-                if (c.get("latest") == null) {
-                    upToDate[0]++;
-                    continue;
-                }
-                outdated.add(Json.obj()
-                        .with("artifact", gav[0] + ":" + gav[1])
-                        .with("current", gav[2])
-                        .with("candidates", c)
-                        .with("modules", e.getValue().size() <= 5 ? e.getValue() : null));
-            } catch (ToolException ex) {
-                failed.add(gav[0] + ":" + gav[1] + ": " + ex.getMessage());
+        // One metadata lookup per artifact, the slow part on a cold cache: run them side by side. Pool
+        // threads inherit this thread's context class loader, which common-pool threads would not.
+        ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, Math.min(8, declared.size())));
+        try {
+            Map<String, Future<List<String>>> lookups = new LinkedHashMap<>();
+            for (String key : declared.keySet()) {
+                String[] gav = key.split(":");
+                lookups.put(
+                        key, pool.submit(() -> newerVersions(ctx, ctx.remoteRepositories(), gav[0], gav[1], gav[2])));
             }
+            List<Map<String, Object>> outdated = new ArrayList<>();
+            for (Map.Entry<String, List<String>> e : declared.entrySet()) {
+                String[] gav = e.getKey().split(":");
+                try {
+                    Map<String, Object> c = Versions.candidates(gav[2], await(lookups.get(e.getKey())), previews);
+                    if (c.get("latest") == null) {
+                        upToDate[0]++;
+                        continue;
+                    }
+                    outdated.add(Json.obj()
+                            .with("artifact", gav[0] + ":" + gav[1])
+                            .with("current", gav[2])
+                            .with("candidates", c)
+                            .with("modules", e.getValue().size() <= 5 ? e.getValue() : null));
+                } catch (ToolException ex) {
+                    failed.add(gav[0] + ":" + gav[1] + ": " + ex.getMessage());
+                }
+            }
+            return outdated;
+        } finally {
+            pool.shutdownNow();
         }
-        return outdated;
+    }
+
+    private static <T> T await(Future<T> future) {
+        try {
+            return future.get();
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof RuntimeException r ? r : new ToolException(rootMessage(e), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ToolException("interrupted", e);
+        }
     }
 
     private Optional<String> currentVersion(ProjectSession s, String groupId, String artifactId) {

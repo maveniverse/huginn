@@ -158,6 +158,14 @@ class McpServerIT {
     }
 
     @Test
+    void versionsListsOutdatedDependenciesInThePackagedServer() throws IOException {
+        // the lookups run on pool threads, which must see the runner's class loader
+        JsonNode r = JSON.readTree(text(call("versions", "{}")));
+        assertEquals("com.acme.lib:liba", r.at("/outdated/0/artifact").asText(), r.toString());
+        assertFalse(r.has("errors"), r.toString());
+    }
+
+    @Test
     void failuresComeBackAsToolErrorsWithAMessage() throws IOException {
         for (String arguments : new String[] {"{\"module\":\"nope\"}", "{\"module\":\"app\",\"scope\":\"bogus\"}"}) {
             JsonNode r = call("dependencies", arguments);
