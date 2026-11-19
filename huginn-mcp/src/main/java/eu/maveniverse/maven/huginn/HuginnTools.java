@@ -17,7 +17,7 @@ import java.nio.file.Path;
 import java.util.function.Supplier;
 
 /**
- * MCP surface: seven read-only tools. Descriptions are short on purpose, since every tool
+ * MCP surface: read-only tools. Descriptions are short on purpose, since every tool
  * description is sent to the agent on every turn. Results are compact JSON.
  */
 @ApplicationScoped
@@ -39,7 +39,7 @@ public class HuginnTools {
     @Tool(
             description = "Describe the Maven project: at the reactor root, its modules, how they depend on each"
                     + " other and the repositories in use; for one module, its effective model (dependencies,"
-                    + " plugins, properties, profiles).",
+                    + " plugins, properties, profiles), or with plugin, that plugin's configuration.",
             annotations =
                     @Annotations(
                             readOnlyHint = true,
@@ -48,8 +48,13 @@ public class HuginnTools {
                             openWorldHint = false))
     String describe(
             @ToolArg(description = PROJECT, required = false) String project,
-            @ToolArg(description = MODULE, required = false) String module) {
-        return call(() -> service.describe(project, module));
+            @ToolArg(description = MODULE, required = false) String module,
+            @ToolArg(
+                            description = "Plugin to show the configuration and executions of: groupId:artifactId, or"
+                                    + " a short name such as 'surefire'",
+                            required = false)
+                    String plugin) {
+        return call(() -> service.describe(project, module, plugin));
     }
 
     @Tool(
@@ -69,8 +74,13 @@ public class HuginnTools {
                             description =
                                     "Maximum tree depth; deeper dependencies are counted, not listed (default: all)",
                             required = false)
-                    Integer maxDepth) {
-        return call(() -> service.dependencies(project, module, scope, maxDepth));
+                    Integer maxDepth,
+            @ToolArg(
+                            description = "groupId:artifactId:version to force, as dependencyManagement would; returns"
+                                    + " what changes on the classpath instead of the tree",
+                            required = false)
+                    String override) {
+        return call(() -> service.dependencies(project, module, scope, maxDepth, override));
     }
 
     @Tool(
@@ -114,8 +124,9 @@ public class HuginnTools {
     }
 
     @Tool(
-            description = "Search Maven Central for artifacts by name or coordinates, e.g. 'jackson databind' or"
-                    + " 'g:com.fasterxml.jackson.core a:jackson-databind'.",
+            description = "Search Maven Central for artifacts by name, coordinates or class, e.g. 'jackson databind',"
+                    + " 'g:com.fasterxml.jackson.core a:jackson-databind', or 'fc:<fully qualified class name>' to"
+                    + " find which artifact has a class.",
             annotations =
                     @Annotations(
                             readOnlyHint = true,
@@ -123,7 +134,7 @@ public class HuginnTools {
                             idempotentHint = true,
                             openWorldHint = true))
     String search(
-            @ToolArg(description = "Search text or g:/a:/v: query") String query,
+            @ToolArg(description = "Search text, or a g:/a:/v:/fc: query; terms combine with AND") String query,
             @ToolArg(description = "Results per page (default 20, max 100)", required = false) Integer limit,
             @ToolArg(
                             description = "Zero-based page number, for more results when 'more' is true (default 0)",
@@ -163,6 +174,24 @@ public class HuginnTools {
             @ToolArg(description = PROJECT, required = false) String project,
             @ToolArg(description = MODULE, required = false) String module) {
         return call(() -> service.sources(project, module, artifact, className));
+    }
+
+    @Tool(
+            description = "Goals of a Maven plugin, or one goal's parameters with their user property (-D) and"
+                    + " default, at the version the project uses (else the latest release).",
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
+    String plugin(
+            @ToolArg(description = "Plugin: groupId:artifactId[:version], or a short name such as 'surefire'")
+                    String plugin,
+            @ToolArg(description = "Goal to list the parameters of, e.g. 'test'", required = false) String goal,
+            @ToolArg(description = PROJECT, required = false) String project,
+            @ToolArg(description = MODULE, required = false) String module) {
+        return call(() -> service.plugin(project, module, plugin, goal));
     }
 
     // ponytail: one call at a time, so a reload never closes a session another call is using;

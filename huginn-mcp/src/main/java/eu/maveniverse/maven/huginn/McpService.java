@@ -14,6 +14,7 @@ import eu.maveniverse.maven.huginn.project.ProjectSessions;
 import eu.maveniverse.maven.huginn.render.Graphs;
 import eu.maveniverse.maven.huginn.render.Json;
 import eu.maveniverse.maven.huginn.support.Extensions;
+import eu.maveniverse.maven.huginn.support.PluginDescriptors;
 import eu.maveniverse.maven.huginn.support.Sources;
 import eu.maveniverse.maven.huginn.support.Versions;
 import eu.maveniverse.maven.mima.context.Context;
@@ -26,6 +27,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -41,8 +43,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.apache.maven.model.Build;
+import org.apache.maven.model.InputLocation;
+import org.apache.maven.model.InputLocationTracker;
+import org.apache.maven.model.InputSource;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.model.PluginExecution;
@@ -69,10 +77,12 @@ import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.VersionRangeRequest;
 import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
 import org.eclipse.aether.util.graph.transformer.ConflictResolver;
+import org.eclipse.aether.util.version.GenericVersionScheme;
+import org.eclipse.aether.version.InvalidVersionSpecificationException;
 import org.eclipse.aether.version.Version;
 
 /**
- * The seven operations behind the MCP tools, independent of the MCP framework. Every operation
+ * The operations behind the MCP tools, independent of the MCP framework. Every operation
  * is project-first: it works on the reactor that contains the given path (default: the
  * server's working directory), with that project's effective models and repositories.
  */
@@ -81,6 +91,7 @@ public final class McpService implements AutoCloseable {
     private static final int MAX_PROPERTIES = 80;
     private static final int MAX_PATHS_PER_MODULE = 10;
     private static final int MAX_SOURCE_CHARS = 60_000;
+    private static final GenericVersionScheme VERSION_SCHEME = new GenericVersionScheme();
 
     private final ProjectSessions sessions = new ProjectSessions();
     private final Path defaultDir;
@@ -100,9 +111,12 @@ public final class McpService implements AutoCloseable {
 
     // ---- describe -----------------------------------------------------------------------------------
 
-    public String describe(String project, String module) {
+    public String describe(String project, String module, String plugin) {
         Path dir = dir(project);
         ProjectSession s = session(dir);
+        if (plugin != null && !plugin.isBlank()) {
+            return Json.write(pluginDetail(s, module(s, module, dir), plugin.trim()));
+        }
         boolean atRoot = (module == null || module.isBlank()) && dir.equals(s.root());
         if (atRoot && s.modules().size() > 1) {
             return Json.write(overview(s));
@@ -162,10 +176,12 @@ public final class McpService implements AutoCloseable {
         }
         o.with("modules", e.getModules());
 
+        Map<String, List<String>> lines = new HashMap<>();
         List<Map<String, Object>> deps = new ArrayList<>();
         for (org.apache.maven.model.Dependency d : e.getDependencies()) {
             Dependency rd = Models.toDependency(d, s.types());
             Json.Obj dj = Json.obj().with("id", Models.id(rd.getArtifact()));
+            dj.putAll(versionOrigin(s, m, m, d, lines));
             if (d.getScope() != null && !"compile".equals(d.getScope())) {
                 dj.with("scope", d.getScope());
             }
@@ -192,6 +208,7 @@ public final class McpService implements AutoCloseable {
         if (e.getBuild() != null) {
             for (Plugin p : e.getBuild().getPlugins()) {
                 Json.Obj pj = Json.obj().with("id", p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion());
+                pj.putAll(versionOrigin(s, m, m, p, lines));
                 List<Map<String, Object>> execs = new ArrayList<>();
                 for (PluginExecution x : p.getExecutions()) {
                     execs.add(Json.obj()
@@ -234,14 +251,82 @@ public final class McpService implements AutoCloseable {
         return o;
     }
 
+    /**
+     * One plugin as the module's effective model configures it. Executions are listed with their own
+     * configuration; Maven merges each over the plugin's configuration when it runs them.
+     */
+    private Map<String, Object> pluginDetail(ProjectSession s, Module m, String selector) {
+        if (m.effective() == null) {
+            throw new ToolException("module " + s.rel(m.raw().dir()) + " has an invalid model: " + m.problem());
+        }
+        Predicate<Plugin> matches = pluginMatcher(selector.split(":"));
+        Build build = m.effective().getBuild();
+        boolean managedOnly = false;
+        Optional<Plugin> found = build == null
+                ? Optional.empty()
+                : build.getPlugins().stream().filter(matches).findFirst();
+        if (found.isEmpty() && build != null && build.getPluginManagement() != null) {
+            found = build.getPluginManagement().getPlugins().stream()
+                    .filter(matches)
+                    .findFirst();
+            managedOnly = found.isPresent();
+        }
+        Plugin p = found.orElseThrow(() -> new ToolException("plugin '" + selector + "' is not configured in "
+                + s.rel(m.raw().dir()) + "; configured: "
+                + (build == null
+                        ? "none"
+                        : build.getPlugins().stream().map(Plugin::getArtifactId).collect(Collectors.joining(", ")))));
+        Json.Obj o = Json.obj()
+                .with("module", s.rel(m.raw().dir()))
+                .with("plugin", p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion());
+        o.putAll(versionOrigin(s, m, m, p, new HashMap<>()));
+        o.with("managed_only", managedOnly ? Boolean.TRUE : null)
+                .with("configuration", xml(p.getConfiguration()))
+                .with(
+                        "executions",
+                        p.getExecutions().stream()
+                                .map(x -> Json.obj()
+                                        .with("id", x.getId())
+                                        .with("phase", x.getPhase())
+                                        .with("goals", x.getGoals())
+                                        .with("configuration", xml(x.getConfiguration())))
+                                .toList())
+                .with(
+                        "dependencies",
+                        p.getDependencies().stream()
+                                .map(d -> d.getGroupId() + ":" + d.getArtifactId() + ":" + d.getVersion())
+                                .toList());
+        if (managedOnly) {
+            o.with(
+                    "note",
+                    "only in pluginManagement: applies whenever the plugin runs in this module, also when the packaging's lifecycle binds it");
+        } else if (!p.getExecutions().isEmpty()) {
+            o.with("note", "each execution's configuration is merged over the plugin's configuration");
+        }
+        return o;
+    }
+
+    /** XML text of a configuration DOM, or null when there is none. */
+    private static String xml(Object configuration) {
+        return configuration == null
+                ? null
+                : configuration
+                        .toString()
+                        .replaceFirst("^<\\?xml[^>]*\\?>\\s*", "")
+                        .trim();
+    }
+
     // ---- dependencies ---------------------------------------------------------------------------------
 
-    public String dependencies(String project, String module, String scope, Integer maxDepth) {
+    public String dependencies(String project, String module, String scope, Integer maxDepth, String override) {
         Path dir = dir(project);
         ProjectSession s = session(dir);
         Module m = requireBuildableModule(s, module, dir);
         Scope rs = scope(scope);
-        CollectResult cr = collect(s, m, rs);
+        if (override != null && !override.isBlank()) {
+            return whatIf(s, m, rs, override.trim());
+        }
+        CollectResult cr = collect(s, m, rs, null);
         Graphs.Tree t = Graphs.tree(cr.getRoot(), maxDepth == null ? 0 : Math.max(0, maxDepth));
         return Json.write(Json.obj()
                 .with("module", s.rel(m.raw().dir()))
@@ -252,6 +337,49 @@ public final class McpService implements AutoCloseable {
                 .with("hidden_deps", t.truncated > 0 ? t.truncated : null)
                 .with("conflicts", new ArrayList<>(t.conflicts.values()))
                 .with("errors", errors(cr)));
+    }
+
+    /** What changes on the classpath when one artifact is forced to a version, as dependencyManagement would. */
+    private String whatIf(ProjectSession s, Module m, Scope rs, String override) {
+        String[] gav = override.split(":");
+        if (gav.length != 3) {
+            throw new ToolException("override must be groupId:artifactId:version");
+        }
+        Artifact forced = new DefaultArtifact(gav[0], gav[1], "jar", gav[2]);
+        Map<String, String> before = Graphs.selected(collect(s, m, rs, null).getRoot());
+        CollectResult cr = collect(s, m, rs, forced);
+        Map<String, String> after = Graphs.selected(cr.getRoot());
+        List<Map<String, Object>> changed = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        before.forEach((k, v) -> {
+            String now = after.get(k);
+            if (now == null) {
+                removed.add(k + ":" + v);
+            } else if (!now.equals(v)) {
+                changed.add(Json.obj().with("artifact", k).with("from", v).with("to", now));
+            }
+        });
+        List<String> added = new ArrayList<>();
+        after.forEach((k, v) -> {
+            if (!before.containsKey(k)) {
+                added.add(k + ":" + v);
+            }
+        });
+        Graphs.Tree t = Graphs.tree(cr.getRoot(), 0);
+        return Json.write(Json.obj()
+                .with("module", s.rel(m.raw().dir()))
+                .with("scope", rs.name().toLowerCase())
+                .with("override", override)
+                .with("changed", changed)
+                .with("added", added)
+                .with("removed", removed)
+                .with("conflicts", new ArrayList<>(t.conflicts.values()))
+                .with("errors", errors(cr))
+                .with(
+                        "hint",
+                        changed.isEmpty() && added.isEmpty() && removed.isEmpty()
+                                ? "nothing changes: not a dependency of this module, or already at that version"
+                                : "to apply it, set the version in dependencyManagement (or the dependency itself)"));
     }
 
     // ---- why ---------------------------------------------------------------------------------------------
@@ -277,7 +405,7 @@ public final class McpService implements AutoCloseable {
         List<Map<String, Object>> found = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         for (Module m : targets) {
-            CollectResult cr = collect(s, m, rs);
+            CollectResult cr = collect(s, m, rs, null);
             List<Map<String, Object>> paths = Graphs.paths(cr.getRoot(), matcher, MAX_PATHS_PER_MODULE);
             if (!paths.isEmpty()) {
                 found.add(Json.obj().with("module", s.rel(m.raw().dir())).with("paths", paths));
@@ -338,9 +466,11 @@ public final class McpService implements AutoCloseable {
                 : List.of(module(ps, module, dir));
         Set<String> reactorKeys = new LinkedHashSet<>();
         ps.modules().forEach(m -> reactorKeys.add(m.key()));
-        // groupId:artifactId:version -> modules declaring it
+        // groupId:artifactId:version -> modules declaring it, and where its version is set
         Map<String, List<String>> declared = new TreeMap<>();
         Map<String, List<String>> declaredPlugins = new TreeMap<>();
+        Map<String, Map<String, Object>> origins = new HashMap<>();
+        Map<String, List<String>> lines = new HashMap<>();
         for (Module m : targets) {
             if (m.effective() == null) {
                 continue;
@@ -355,24 +485,25 @@ public final class McpService implements AutoCloseable {
                 }
                 declared.computeIfAbsent(key + ":" + d.getVersion(), k -> new ArrayList<>())
                         .add(ps.rel(m.raw().dir()));
+                origins.putIfAbsent(key + ":" + d.getVersion(), versionOrigin(ps, m, null, d, lines));
             }
             if (m.effective().getBuild() != null) {
                 for (Plugin p : m.effective().getBuild().getPlugins()) {
                     if (p.getVersion() != null) {
+                        String key = p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion();
                         declaredPlugins
-                                .computeIfAbsent(
-                                        p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion(),
-                                        k -> new ArrayList<>())
+                                .computeIfAbsent(key, k -> new ArrayList<>())
                                 .add(ps.rel(m.raw().dir()));
+                        origins.putIfAbsent(key, versionOrigin(ps, m, null, p, lines));
                     }
                 }
             }
         }
         List<String> failed = new ArrayList<>();
         int[] upToDate = new int[1];
-        List<Map<String, Object>> outdated = outdated(declared, ps.context(), previews, failed, upToDate);
+        List<Map<String, Object>> outdated = outdated(declared, origins, ps.context(), previews, failed, upToDate);
         List<Map<String, Object>> outdatedPlugins =
-                outdated(declaredPlugins, ps.pluginContext(), previews, failed, upToDate);
+                outdated(declaredPlugins, origins, ps.pluginContext(), previews, failed, upToDate);
         return Json.write(Json.obj()
                 .with("checked", declared.size() + declaredPlugins.size())
                 .with("up_to_date", upToDate[0])
@@ -382,13 +513,18 @@ public final class McpService implements AutoCloseable {
                 .with(
                         "note",
                         "direct dependencies and plugins with versions as resolved in the effective model;"
-                                + " versions set via dependencyManagement or pluginManagement change in the"
-                                + " BOM or parent that manages them; only plugins declared in <build><plugins>"
-                                + " are checked, lifecycle plugins not declared there are not"));
+                                + " to upgrade, edit version_in, or property_in when the version is a property;"
+                                + " only plugins declared in <build><plugins> are checked, lifecycle plugins not"
+                                + " declared there are not"));
     }
 
     private static List<Map<String, Object>> outdated(
-            Map<String, List<String>> declared, Context ctx, boolean previews, List<String> failed, int[] upToDate) {
+            Map<String, List<String>> declared,
+            Map<String, Map<String, Object>> origins,
+            Context ctx,
+            boolean previews,
+            List<String> failed,
+            int[] upToDate) {
         // One metadata lookup per artifact, the slow part on a cold cache: run them side by side. Pool
         // threads inherit this thread's context class loader, which common-pool threads would not.
         ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, Math.min(8, declared.size())));
@@ -413,6 +549,7 @@ public final class McpService implements AutoCloseable {
                             .with("current", gav[2])
                             .with("candidates", c)
                             .with("modules", e.getValue().size() <= 5 ? e.getValue() : null));
+                    outdated.get(outdated.size() - 1).putAll(origins.getOrDefault(e.getKey(), Map.of()));
                 } catch (ToolException ex) {
                     failed.add(gav[0] + ":" + gav[1] + ": " + ex.getMessage());
                 }
@@ -492,26 +629,57 @@ public final class McpService implements AutoCloseable {
         }
         int max = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
         int pageNo = page == null ? 0 : Math.max(0, page);
+        // A class search returns one record per version, so fetch more records and keep one per artifact.
+        // shortcut: past `limit` artifacts the rest of those records are not shown; a larger limit shows them
+        boolean classSearch = query.matches("(?s).*\\b(fc|c):.*");
+        int fetch = classSearch ? 200 : max;
         try (SearchBackend backend = SmoSearchBackendFactory.createCsc(new Java11HttpClientTransport())) {
             SearchResponse response =
-                    backend.search(new SearchRequest(new Paging(max, pageNo), Query.query(centralQuery(query))));
+                    backend.search(new SearchRequest(new Paging(fetch, pageNo), Query.query(centralQuery(query))));
             List<String> ids = new ArrayList<>();
             for (Record r : response.getPage()) {
-                if (ids.size() >= max) {
-                    break;
-                }
                 ids.add(r.getValue(MAVEN.GROUP_ID) + ":" + r.getValue(MAVEN.ARTIFACT_ID) + ":"
                         + r.getValue(MAVEN.VERSION));
             }
+            List<String> results = newestPerArtifact(ids);
             return Json.write(Json.obj()
                     .with("query", query)
                     .with("total_hits", response.getTotalHits())
                     .with("page", pageNo)
-                    .with("more", (long) (pageNo + 1) * max < response.getTotalHits() ? Boolean.TRUE : null)
-                    .with("results", ids)
-                    .with("note", "Maven Central only; use versions for the project's own repositories"));
+                    .with(
+                            "more",
+                            (long) (pageNo + 1) * fetch < response.getTotalHits() || results.size() > max
+                                    ? Boolean.TRUE
+                                    : null)
+                    .with("results", results.size() > max ? results.subList(0, max) : results)
+                    .with(
+                            "note",
+                            classSearch
+                                    ? "class search: every jar containing the class, shaded copies included,"
+                                            + " sorted by artifactId; add g:<groupId> to narrow"
+                                    : "Maven Central only; use versions for the project's own repositories"));
         } catch (IOException e) {
             throw new ToolException("search failed: " + rootMessage(e), e);
+        }
+    }
+
+    /** One entry per groupId:artifactId, with its newest version: class searches return every version. */
+    static List<String> newestPerArtifact(List<String> gavs) {
+        Map<String, String> newest = new LinkedHashMap<>();
+        for (String gav : gavs) {
+            int colon = gav.lastIndexOf(':');
+            newest.merge(gav.substring(0, colon), gav.substring(colon + 1), (a, b) -> newer(a, b));
+        }
+        return newest.entrySet().stream()
+                .map(e -> e.getKey() + ":" + e.getValue())
+                .toList();
+    }
+
+    private static String newer(String a, String b) {
+        try {
+            return VERSION_SCHEME.parseVersion(a).compareTo(VERSION_SCHEME.parseVersion(b)) >= 0 ? a : b;
+        } catch (InvalidVersionSpecificationException e) {
+            return a;
         }
     }
 
@@ -676,6 +844,127 @@ public final class McpService implements AutoCloseable {
                 .with("hint", "read files under dir, or call again with className=<fully qualified name>"));
     }
 
+    // ---- plugin -----------------------------------------------------------------------------------
+
+    public String plugin(String project, String module, String plugin, String goal) {
+        if (plugin == null || plugin.isBlank()) {
+            throw new ToolException(
+                    "plugin is required, e.g. 'surefire' or 'org.apache.maven.plugins:maven-surefire-plugin'");
+        }
+        String[] parts = plugin.trim().split(":");
+        Path dir = dir(project);
+        Optional<ProjectSession> s = optionalSession(dir);
+        Optional<Plugin> declared = s.flatMap(ps -> projectPlugin(ps, module, dir, parts));
+        String groupId =
+                parts.length >= 2 ? parts[0] : declared.map(Plugin::getGroupId).orElse("org.apache.maven.plugins");
+        String artifactId = parts.length >= 2
+                ? parts[1]
+                : declared.map(Plugin::getArtifactId)
+                        .orElse(parts[0].endsWith("-plugin") ? parts[0] : "maven-" + parts[0] + "-plugin");
+        Context ctx = s.map(ProjectSession::pluginContext).orElseGet(this::standaloneContext);
+        String version =
+                parts.length >= 3 ? parts[2] : declared.map(Plugin::getVersion).orElse(null);
+        String versionSource = parts.length >= 3 ? null : version != null ? "project" : "latest release";
+        if (version == null) {
+            List<String> release =
+                    Versions.recent(newerVersions(ctx, ctx.remoteRepositories(), groupId, artifactId, "0"), false, 1);
+            if (release.isEmpty()) {
+                throw new ToolException("no release of " + groupId + ":" + artifactId
+                        + " in the plugin repositories; pass groupId:artifactId:version");
+            }
+            version = release.get(0);
+        }
+        String id = groupId + ":" + artifactId + ":" + version;
+        PluginDescriptors.Descriptor descriptor;
+        try {
+            Path jar = ctx.repositorySystem()
+                    .resolveArtifact(
+                            ctx.repositorySystemSession(),
+                            new ArtifactRequest(
+                                    new DefaultArtifact(groupId, artifactId, "jar", version),
+                                    ctx.remoteRepositories(),
+                                    null))
+                    .getArtifact()
+                    .getFile()
+                    .toPath();
+            descriptor = PluginDescriptors.read(jar);
+        } catch (Exception e) {
+            throw new ToolException("cannot read the plugin descriptor of " + id + ": " + rootMessage(e), e);
+        }
+        Json.Obj o = Json.obj().with("plugin", id).with("version_source", versionSource);
+        if (goal == null || goal.isBlank()) {
+            return Json.write(o.with("prefix", descriptor.goalPrefix())
+                    .with(
+                            "goals",
+                            descriptor.mojos().stream()
+                                    .map(m -> Json.obj()
+                                            .with("goal", m.goal())
+                                            .with("phase", m.phase())
+                                            .with("description", m.description()))
+                                    .toList())
+                    .with("hint", "call again with goal=<goal> for its parameters"));
+        }
+        PluginDescriptors.Mojo mojo = descriptor.mojos().stream()
+                .filter(m -> m.goal().equals(goal.trim()))
+                .findFirst()
+                .orElseThrow(() -> new ToolException("no goal '" + goal + "' in " + id + "; goals: "
+                        + descriptor.mojos().stream()
+                                .map(PluginDescriptors.Mojo::goal)
+                                .collect(Collectors.joining(", "))));
+        List<Map<String, Object>> parameters = new ArrayList<>();
+        for (PluginDescriptors.Parameter p : mojo.parameters()) {
+            parameters.add(Json.obj()
+                    .with("name", p.name())
+                    .with("type", p.type())
+                    .with("required", p.required() ? Boolean.TRUE : null)
+                    .with("property", p.property())
+                    .with("default", p.defaultValue())
+                    .with("deprecated", p.deprecated() ? Boolean.TRUE : null)
+                    .with("description", p.description()));
+        }
+        return Json.write(o.with("goal", mojo.goal())
+                .with("phase", mojo.phase())
+                .with("description", mojo.description())
+                .with("parameters", parameters)
+                .with("note", "property is the user property, set as -D<property>=value"));
+    }
+
+    /**
+     * The plugin as the project declares it, in the module's build plugins or plugin management first,
+     * then in any module. A bare name matches {@code name}, {@code maven-name-plugin} and
+     * {@code name-maven-plugin}.
+     */
+    private Optional<Plugin> projectPlugin(ProjectSession s, String module, Path dir, String[] parts) {
+        Predicate<Plugin> matches = pluginMatcher(parts);
+        List<Module> candidates = new ArrayList<>();
+        candidates.add(module(s, module, dir));
+        s.modules().stream().filter(m -> !candidates.contains(m)).forEach(candidates::add);
+        for (Module m : candidates) {
+            if (m.effective() == null || m.effective().getBuild() == null) {
+                continue;
+            }
+            Stream<Plugin> all = Stream.concat(
+                    m.effective().getBuild().getPlugins().stream(),
+                    m.effective().getBuild().getPluginManagement() != null
+                            ? m.effective().getBuild().getPluginManagement().getPlugins().stream()
+                            : Stream.empty());
+            Optional<Plugin> found = all.filter(matches).findFirst();
+            if (found.isPresent()) {
+                return found;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static Predicate<Plugin> pluginMatcher(String[] parts) {
+        String name = parts[0];
+        return parts.length >= 2
+                ? p -> parts[0].equals(p.getGroupId()) && parts[1].equals(p.getArtifactId())
+                : p -> p.getArtifactId().equals(name)
+                        || p.getArtifactId().equals("maven-" + name + "-plugin")
+                        || p.getArtifactId().equals(name + "-maven-plugin");
+    }
+
     /** The version the project actually ends up with: declared, managed, or selected in the graph. */
     private Optional<String> selectedVersion(ProjectSession s, String module, Path dir, String g, String a) {
         List<Module> candidates = new ArrayList<>();
@@ -690,7 +979,7 @@ public final class McpService implements AutoCloseable {
             if (m.effective() == null || m.effective().getDependencies().isEmpty()) {
                 continue;
             }
-            CollectResult cr = collect(s, m, Scope.TEST);
+            CollectResult cr = collect(s, m, Scope.TEST, null);
             Optional<String> v = findSelected(cr.getRoot(), matcher, new LinkedHashSet<>());
             if (v.isPresent()) {
                 return v;
@@ -720,11 +1009,92 @@ public final class McpService implements AutoCloseable {
 
     // ---- shared helpers ---------------------------------------------------------------------------------
 
-    private CollectResult collect(ProjectSession s, Module m, Scope scope) {
+    private static final Pattern VERSION_PROPERTY = Pattern.compile("^[^<]*?\\$\\{([^}]+)}");
+
+    /**
+     * Where the version of a dependency or plugin is written: {@code version_in}, the POM (a reactor
+     * path, else groupId:artifactId:version of a parent or BOM), and when it is a property,
+     * {@code version_property} and {@code property_in}. A location in {@code own}'s POM is left out.
+     */
+    private static Map<String, Object> versionOrigin(
+            ProjectSession s, Module m, Module own, InputLocationTracker element, Map<String, List<String>> lines) {
+        Json.Obj o = Json.obj();
+        InputLocation loc = element.getLocation("version");
+        if (loc == null || loc.getSource() == null) {
+            return o;
+        }
+        if (own == null || !isPomOf(own, loc.getSource())) {
+            o.with("version_in", pomName(s, loc.getSource()));
+        }
+        String property = versionProperty(loc, lines);
+        if (property == null) {
+            return o;
+        }
+        o.with("version_property", property);
+        if (s.config().userProperties().containsKey(property)) {
+            return o.with("property_in", ".mvn/maven.config");
+        }
+        InputLocation props = m.effective().getLocation("properties");
+        InputLocation p = props != null ? props.getLocation(property) : null;
+        if (p != null && p.getSource() != null && (own == null || !isPomOf(own, p.getSource()))) {
+            o.with("property_in", pomName(s, p.getSource()));
+        }
+        return o;
+    }
+
+    private static boolean isPomOf(Module m, InputSource source) {
+        return source.getLocation() != null
+                && Path.of(source.getLocation())
+                        .toAbsolutePath()
+                        .normalize()
+                        .equals(m.raw().pom());
+    }
+
+    private static String pomName(ProjectSession s, InputSource source) {
+        if (source.getLocation() != null) {
+            Path pom = Path.of(source.getLocation()).toAbsolutePath().normalize();
+            if (pom.startsWith(s.root())) {
+                return s.rel(pom);
+            }
+        }
+        return source.getModelId();
+    }
+
+    /** The property a {@code <version>} element starts with, read from the POM right after its start tag. */
+    private static String versionProperty(InputLocation loc, Map<String, List<String>> lines) {
+        String file = loc.getSource().getLocation();
+        if (file == null || loc.getLineNumber() <= 0) {
+            return null;
+        }
+        List<String> text = lines.computeIfAbsent(file, f -> {
+            try {
+                return Files.readAllLines(Path.of(f), StandardCharsets.UTF_8);
+            } catch (IOException | RuntimeException e) {
+                return List.of();
+            }
+        });
+        if (loc.getLineNumber() > text.size()) {
+            return null;
+        }
+        // shortcut: only the start tag's line is read, so a version on the next line shows no property
+        String line = text.get(loc.getLineNumber() - 1);
+        String rest = line.substring(Math.max(0, Math.min(line.length(), loc.getColumnNumber() - 1)));
+        Matcher matcher = VERSION_PROPERTY.matcher(rest);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /** @param forced nullable: an artifact whose version wins everywhere, direct and transitive */
+    private CollectResult collect(ProjectSession s, Module m, Scope scope, Artifact forced) {
         Model e = m.effective();
         List<Dependency> deps = Models.dependencies(e, s.types()).stream()
                 .filter(d -> scope.direct.contains(d.getScope().isEmpty() ? "compile" : d.getScope()))
+                .map(d -> force(d, forced))
                 .toList();
+        List<Dependency> managed = new ArrayList<>();
+        if (forced != null) {
+            managed.add(new Dependency(forced, null)); // first entry wins over the project's own
+        }
+        Models.managedDependencies(e, s.types()).forEach(d -> managed.add(force(d, forced)));
         try {
             // verbose: conflict losers stay in the graph, so 'why' can show who asked for what
             DefaultRepositorySystemSession session =
@@ -734,7 +1104,7 @@ public final class McpService implements AutoCloseable {
             CollectRequest request = new CollectRequest();
             request.setRootArtifact(m.artifact());
             request.setDependencies(deps);
-            request.setManagedDependencies(Models.managedDependencies(e, s.types()));
+            request.setManagedDependencies(managed);
             request.setRepositories(s.context().remoteRepositories());
             CollectResult result = s.context().repositorySystem().collectDependencies(session, request);
             prune(result.getRoot(), scope.direct, Collections.newSetFromMap(new IdentityHashMap<>()));
@@ -748,6 +1118,15 @@ public final class McpService implements AutoCloseable {
             throw new ToolException(
                     "cannot collect dependencies of " + s.rel(m.raw().dir()) + ": " + rootMessage(ex), ex);
         }
+    }
+
+    private static Dependency force(Dependency d, Artifact forced) {
+        Artifact a = d.getArtifact();
+        return forced != null
+                        && forced.getGroupId().equals(a.getGroupId())
+                        && forced.getArtifactId().equals(a.getArtifactId())
+                ? d.setArtifact(a.setVersion(forced.getVersion()))
+                : d;
     }
 
     /**

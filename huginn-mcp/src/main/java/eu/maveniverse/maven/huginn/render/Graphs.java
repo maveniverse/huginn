@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Predicate;
 import org.eclipse.aether.artifact.Artifact;
 import org.eclipse.aether.graph.DependencyNode;
@@ -143,6 +144,23 @@ public final class Graphs {
     static DependencyNode winner(DependencyNode node) {
         Object w = node.getData().get(ConflictResolver.NODE_DATA_WINNER);
         return w instanceof DependencyNode d ? d : null;
+    }
+
+    /** Every artifact that ends up on the classpath: {@code groupId:artifactId[:extension[:classifier]]} to version. */
+    public static Map<String, String> selected(DependencyNode root) {
+        Map<String, String> out = new TreeMap<>();
+        collectSelected(root, out, Collections.newSetFromMap(new IdentityHashMap<>()));
+        return out;
+    }
+
+    private static void collectSelected(DependencyNode node, Map<String, String> out, Set<DependencyNode> seen) {
+        for (DependencyNode c : node.getChildren()) {
+            if (c.getArtifact() != null && winner(c) == null && seen.add(c)) {
+                String id = Models.id(c.getArtifact());
+                out.put(id.substring(0, id.lastIndexOf(':')), c.getArtifact().getVersion());
+                collectSelected(c, out, seen);
+            }
+        }
     }
 
     // ---- paths ("why") --------------------------------------------------------------------------

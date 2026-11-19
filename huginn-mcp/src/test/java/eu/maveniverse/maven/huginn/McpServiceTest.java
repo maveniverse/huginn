@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -53,7 +54,7 @@ class McpServiceTest {
 
     @Test
     void describeRootListsModulesAndMavenConfig() {
-        String json = service.describe(null, null);
+        String json = service.describe(null, null, null);
         assertContains(
                 json,
                 "\"id\":\"com.acme:parent:pom:1.4.0\"", // ${revision} from .mvn/maven.config
@@ -66,7 +67,7 @@ class McpServiceTest {
 
     @Test
     void describeModuleShowsEffectiveModel() {
-        String json = service.describe(null, "app");
+        String json = service.describe(null, "app", null);
         assertContains(
                 json,
                 "\"parent\":\"com.acme:parent:1.4.0\"",
@@ -76,17 +77,46 @@ class McpServiceTest {
     }
 
     @Test
+    void describeTellsWhereAVersionIsSet() {
+        String json = service.describe(null, "core", null);
+        assertContains(
+                json,
+                // a property defined in the parent POM
+                "\"id\":\"com.acme.lib:libb:1.0\",\"version_property\":\"libb.version\",\"property_in\":\"pom.xml\"",
+                // managed by a BOM the parent imports
+                "\"id\":\"com.acme.lib:libe:1.0\",\"version_in\":\"com.acme.lib:acme-bom:1.0\"");
+        // written in the module's own POM: nothing to add
+        assertContains(json, "{\"id\":\"com.acme.lib:liba:1.0\"}");
+        assertContains(
+                service.describe(null, "app", null), "\"id\":\"com.acme.lib:libd:1.0\",\"version_in\":\"pom.xml\"");
+    }
+
+    @Test
+    void describeShowsAPluginsConfiguration() {
+        String json = service.describe(null, "core", "pluginx");
+        assertContains(
+                json,
+                "\"plugin\":\"com.acme.lib:pluginx:1.0\"",
+                "\"configuration\":\"<configuration>",
+                "<skip>true</skip>",
+                "\"executions\":[{\"id\":\"e1\",\"phase\":\"verify\",\"goals\":[\"run\"],\"configuration\":",
+                "<count>3</count>");
+        ToolException e = assertThrows(ToolException.class, () -> service.describe(null, "app", "pluginx"));
+        assertContains(e.getMessage(), "not configured in app");
+    }
+
+    @Test
     void moduleSelectorAcceptsPathArtifactIdAndGa() {
         for (String selector : new String[] {"app", "com.acme:app"}) {
-            assertContains(service.describe(null, selector), "\"module\":\"app\"");
+            assertContains(service.describe(null, selector, null), "\"module\":\"app\"");
         }
-        assertContains(service.describe("app", null), "\"module\":\"app\"");
-        assertContains(service.describe("app/pom.xml", null), "\"module\":\"app\"");
+        assertContains(service.describe("app", null, null), "\"module\":\"app\"");
+        assertContains(service.describe("app/pom.xml", null, null), "\"module\":\"app\"");
     }
 
     @Test
     void unknownModuleListsTheKnownOnes() {
-        ToolException e = assertThrows(ToolException.class, () -> service.describe(null, "nope"));
+        ToolException e = assertThrows(ToolException.class, () -> service.describe(null, "nope", null));
         assertContains(e.getMessage(), "no module 'nope'", "core", "app");
     }
 
@@ -94,7 +124,7 @@ class McpServiceTest {
 
     @Test
     void dependenciesResolveSiblingsFromTheWorkingTreeAndReportConflicts() {
-        String json = service.dependencies(null, "app", null, null);
+        String json = service.dependencies(null, "app", null, null, null);
         assertContains(
                 json,
                 "\"id\":\"com.acme:core:1.4.0\"", // never installed, served by the workspace reader
@@ -107,17 +137,17 @@ class McpServiceTest {
 
     @Test
     void dependenciesScopeFiltersTestDependencies() {
-        assertContains(service.dependencies(null, "app", "test", null), "com.acme.lib:libd:1.0");
-        assertFalse(service.dependencies(null, "app", "compile", null).contains("libd"));
-        assertFalse(service.dependencies(null, "app", "runtime", null).contains("libd"));
-        assertThrows(ToolException.class, () -> service.dependencies(null, "app", "bogus", null));
+        assertContains(service.dependencies(null, "app", "test", null, null), "com.acme.lib:libd:1.0");
+        assertFalse(service.dependencies(null, "app", "compile", null, null).contains("libd"));
+        assertFalse(service.dependencies(null, "app", "runtime", null, null).contains("libd"));
+        assertThrows(ToolException.class, () -> service.dependencies(null, "app", "bogus", null, null));
     }
 
     @Test
     void dependenciesScopeFiltersTransitiveRuntimeDependencies() {
-        assertContains(service.dependencies(null, "core", "runtime", null), "com.acme.lib:libf:1.0");
-        assertContains(service.dependencies(null, "core", "test", null), "com.acme.lib:libf:1.0");
-        String compile = service.dependencies(null, "core", "compile", null);
+        assertContains(service.dependencies(null, "core", "runtime", null, null), "com.acme.lib:libf:1.0");
+        assertContains(service.dependencies(null, "core", "test", null, null), "com.acme.lib:libf:1.0");
+        String compile = service.dependencies(null, "core", "compile", null, null);
         assertContains(compile, "com.acme.lib:libe:1.0");
         assertFalse(compile.contains("libf"), compile);
         assertContains(service.why(null, "core", "libf", "compile"), "try scope=test");
@@ -125,15 +155,30 @@ class McpServiceTest {
 
     @Test
     void dependenciesMaxDepthCountsWhatItHides() {
-        String json = service.dependencies(null, "app", null, 1);
+        String json = service.dependencies(null, "app", null, 1, null);
         assertContains(json, "\"id\":\"com.acme:core:1.4.0\"", "\"hidden_deps\":");
         assertFalse(json.contains("liba"), json);
     }
 
     @Test
     void dependenciesNeedsAModuleAtAnAggregatorRoot() {
-        ToolException e = assertThrows(ToolException.class, () -> service.dependencies(null, null, null, null));
+        ToolException e = assertThrows(ToolException.class, () -> service.dependencies(null, null, null, null, null));
         assertContains(e.getMessage(), "aggregator", "app");
+    }
+
+    @Test
+    void dependenciesOverrideShowsWhatChanges() {
+        // libc is transitive: liba wants 1.0 and wins over libb's 2.0
+        String json = service.dependencies(null, "core", null, null, "com.acme.lib:libc:3.0");
+        assertContains(json, "\"changed\":[{\"artifact\":\"com.acme.lib:libc\",\"from\":\"1.0\",\"to\":\"3.0\"}]");
+        assertFalse(json.contains("\"conflicts\""), json); // both requests are forced to 3.0
+        // a direct dependency is forced too
+        assertContains(
+                service.dependencies(null, "core", null, null, "com.acme.lib:liba:2.0"),
+                "{\"artifact\":\"com.acme.lib:liba\",\"from\":\"1.0\",\"to\":\"2.0\"}");
+        assertContains(
+                service.dependencies(null, "core", null, null, "com.acme.lib:nope:1.0"), "\"hint\":\"nothing changes");
+        assertThrows(ToolException.class, () -> service.dependencies(null, "core", null, null, "libc"));
     }
 
     // ---- why ----------------------------------------------------------------------------------------
@@ -194,7 +239,12 @@ class McpServiceTest {
     @Test
     void versionsWithoutArtifactListOutdatedDirectDependencies() {
         String json = service.versions(null, null, null, null);
-        assertContains(json, "\"artifact\":\"com.acme.lib:liba\"", "\"current\":\"1.0\"", "\"latest\":\"2.0\"");
+        assertContains(
+                json,
+                "\"artifact\":\"com.acme.lib:liba\"",
+                "\"current\":\"1.0\"",
+                "\"latest\":\"2.0\"",
+                "\"version_in\":\"core/pom.xml\"");
         assertFalse(json.contains("\"artifact\":\"com.acme.lib:libb\""), json); // already the newest
         assertFalse(json.contains("com.acme:core"), json); // reactor modules are not upgrade candidates
     }
@@ -278,6 +328,31 @@ class McpServiceTest {
         assertFalse(json.contains(".mvn/extensions.xml"), json);
     }
 
+    // ---- plugin -------------------------------------------------------------------------------------
+
+    @Test
+    void pluginListsGoalsAtTheProjectsVersion() {
+        assertContains(
+                service.plugin(null, "core", "pluginx", null),
+                "\"plugin\":\"com.acme.lib:pluginx:1.0\"",
+                "\"version_source\":\"project\"",
+                "\"prefix\":\"x\"",
+                "{\"goal\":\"run\",\"phase\":\"verify\",\"description\":\"Runs the thing.\"}");
+    }
+
+    @Test
+    void pluginGoalListsTheParametersAUserCanSet() {
+        String json = service.plugin(null, null, "com.acme.lib:pluginx:1.0", "run");
+        assertContains(
+                json,
+                "{\"name\":\"skip\",\"type\":\"boolean\",\"property\":\"x.skip\",\"default\":\"false\","
+                        + "\"description\":\"Skips it.\"}",
+                "{\"name\":\"count\",\"type\":\"int\",\"required\":true,\"deprecated\":true");
+        assertFalse(json.contains("\"name\":\"project\""), json); // set by Maven, not by users
+        ToolException e = assertThrows(ToolException.class, () -> service.plugin(null, null, "pluginx", "nope"));
+        assertContains(e.getMessage(), "goals: run");
+    }
+
     // ---- sources ------------------------------------------------------------------------------------
 
     @Test
@@ -312,26 +387,33 @@ class McpServiceTest {
         assertEquals("jackson AND databind", McpService.centralQuery("jackson databind"));
     }
 
+    @Test
+    void searchResultsKeepTheNewestVersionPerArtifact() {
+        assertEquals(
+                List.of("a:x:1.10", "b:y:2.0"),
+                McpService.newestPerArtifact(List.of("a:x:1.9", "b:y:2.0", "a:x:1.10", "a:x:1.10-RC1")));
+    }
+
     // ---- reload -------------------------------------------------------------------------------------
 
     @Test
     void editingAPomReloadsTheReactor() throws IOException {
         Path pom = reactor.root.resolve("core/pom.xml");
         String original = Files.readString(pom);
-        assertContains(service.dependencies(null, "core", null, null), "liba:1.0");
+        assertContains(service.dependencies(null, "core", null, null, null), "liba:1.0");
         try {
             Files.writeString(
                     pom,
                     original.replace(
                             "<version>1.0</version></dependency><dependency>",
                             "<version>2.0</version></dependency><dependency>"));
-            String json = service.dependencies(null, "core", null, null);
+            String json = service.dependencies(null, "core", null, null, null);
             assertContains(json, "com.acme.lib:liba:2.0");
             assertFalse(json.contains("liba:1.0"), json);
         } finally {
             Files.writeString(pom, original);
         }
-        assertContains(service.dependencies(null, "core", null, null), "liba:1.0");
+        assertContains(service.dependencies(null, "core", null, null, null), "liba:1.0");
     }
 
     @Test
@@ -342,19 +424,19 @@ class McpServiceTest {
         try {
             Files.writeString(
                     rootPom, original.replace("<module>app</module>", "<module>app</module><module>extra</module>"));
-            assertFalse(service.describe(null, null).contains("extra"));
+            assertFalse(service.describe(null, null, null).contains("extra"));
             DemoReactor.write(
                     extra.resolve("pom.xml"),
                     "<project><modelVersion>4.0.0</modelVersion><parent><groupId>com.acme</groupId>"
                             + "<artifactId>parent</artifactId><version>${revision}</version></parent>"
                             + "<artifactId>extra</artifactId></project>");
-            assertContains(service.describe(null, null), "\"id\":\"com.acme:extra:1.4.0\"");
+            assertContains(service.describe(null, null, null), "\"id\":\"com.acme:extra:1.4.0\"");
         } finally {
             Files.writeString(rootPom, original);
             Files.deleteIfExists(extra.resolve("pom.xml"));
             Files.deleteIfExists(extra);
         }
-        assertFalse(service.describe(null, null).contains("extra"));
+        assertFalse(service.describe(null, null, null).contains("extra"));
     }
 
     @Test
@@ -363,12 +445,12 @@ class McpServiceTest {
         String original = Files.readString(pom);
         try {
             Files.writeString(pom, original.replace("</project>", ""));
-            String json = service.describe(null, null);
+            String json = service.describe(null, null, null);
             assertContains(json, "\"id\":\"com.acme:app:1.4.0\"", "\"path\":\"core\"", "\"problem\":");
         } finally {
             Files.writeString(pom, original);
         }
-        assertContains(service.describe(null, null), "\"id\":\"com.acme:core:1.4.0\"");
+        assertContains(service.describe(null, null, null), "\"id\":\"com.acme:core:1.4.0\"");
     }
 
     @Test
@@ -398,7 +480,7 @@ class McpServiceTest {
                 proj.resolve("m/pom.xml"),
                 "<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>m</artifactId>"
                         + "<version>1</version></project>");
-        String json = service.describe(proj.toString(), null);
+        String json = service.describe(proj.toString(), null, null);
         assertContains(json, "\"id\":\"project-mirror\"");
         assertFalse(json.contains("demo-mirror"), json);
     }
