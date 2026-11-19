@@ -343,7 +343,10 @@ public final class McpService implements AutoCloseable {
             }
             for (org.apache.maven.model.Dependency d : m.effective().getDependencies()) {
                 String key = d.getGroupId() + ":" + d.getArtifactId();
-                if (reactorKeys.contains(key) || "system".equals(d.getScope()) || d.getVersion() == null) {
+                if (reactorKeys.contains(key)
+                        || "system".equals(d.getScope())
+                        || d.getVersion() == null
+                        || isRange(d.getVersion())) {
                     continue;
                 }
                 declared.computeIfAbsent(key + ":" + d.getVersion(), k -> new ArrayList<>())
@@ -416,7 +419,7 @@ public final class McpService implements AutoCloseable {
                             : Stream.empty());
             Optional<String> v = all.filter(d -> groupId.equals(d.getGroupId()) && artifactId.equals(d.getArtifactId()))
                     .map(org.apache.maven.model.Dependency::getVersion)
-                    .filter(x -> x != null && !x.isBlank())
+                    .filter(x -> x != null && !x.isBlank() && !isRange(x))
                     .findFirst();
             if (v.isEmpty() && m.effective().getBuild() != null) {
                 v = m.effective().getBuild().getPlugins().stream()
@@ -430,6 +433,11 @@ public final class McpService implements AutoCloseable {
             }
         }
         return Optional.empty();
+    }
+
+    /** A range has no single current version to compare against; the graph's selection does. */
+    private static boolean isRange(String version) {
+        return version.startsWith("[") || version.startsWith("(");
     }
 
     private static List<String> newerVersions(

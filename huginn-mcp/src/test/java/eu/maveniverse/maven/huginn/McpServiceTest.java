@@ -208,6 +208,23 @@ class McpServiceTest {
     }
 
     @Test
+    void versionsOfARangeDependencyUseTheSelectedVersion() throws IOException {
+        Path proj = tmp.resolve("with-range");
+        DemoReactor.write(
+                proj.resolve("pom.xml"),
+                "<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>r</artifactId>"
+                        + "<version>1</version><dependencies><dependency><groupId>com.acme.lib</groupId>"
+                        + "<artifactId>libc</artifactId><version>[1.0,2.0]</version></dependency></dependencies>"
+                        + "</project>");
+        String outdated = service.versions(proj.toString(), null, null, null);
+        assertFalse(outdated.contains("errors"), outdated);
+        assertContains(
+                service.versions(proj.toString(), null, "com.acme.lib:libc", null),
+                "\"current\":\"2.0\"",
+                "\"latest\":\"3.0\"");
+    }
+
+    @Test
     void versionsCandidatesIncludePreviewsWhenAsked() {
         assertFalse(service.versions(null, null, "com.acme.lib:libc:2.0", null).contains("latest_minor"));
         assertContains(service.versions(null, null, "com.acme.lib:libc:2.0", true), "\"latest_minor\":\"2.1-RC1\"");
