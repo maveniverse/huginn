@@ -18,6 +18,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
@@ -66,6 +72,29 @@ class SourcesTest {
         Files.setLastModifiedTime(jar, FileTime.fromMillis(System.currentTimeMillis() + 60_000));
         Sources.extract(jar, cache, "com.acme", "lib", "1.0-SNAPSHOT");
         assertTrue(Files.exists(dir.resolve("com/acme/Foo.java")));
+    }
+
+    @Test
+    void concurrentExtractionsAllSeeACompleteDirectory(@TempDir Path tmp) throws Exception {
+        Path cache = tmp.resolve("cache");
+        Path jar = jar(tmp);
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        try {
+            List<Future<Path>> results = new ArrayList<>();
+            for (int i = 0; i < 16; i++) {
+                results.add(pool.submit(() -> Sources.extract(jar, cache, "com.acme", "lib", "1.0")));
+            }
+            for (Future<Path> f : results) {
+                assertTrue(Files.isRegularFile(f.get().resolve("com/acme/Foo.java")));
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        try (Stream<Path> s = Files.list(cache.resolve("com.acme/lib"))) {
+            assertEquals(
+                    List.of("1.0", "1.0.lock"),
+                    s.map(p -> p.getFileName().toString()).sorted().toList());
+        }
     }
 
     @Test

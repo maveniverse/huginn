@@ -36,6 +36,10 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -309,7 +313,12 @@ public final class McpService implements AutoCloseable {
             }
             String current = parts.length >= 3 ? parts[parts.length - 1] : null;
             if (current == null && s.isPresent()) {
-                current = currentVersion(s.orElseThrow(), parts[0], parts[1]).orElse(null);
+                // declared first (cheap, finds plugins too), then the graph, like sources does
+                ProjectSession ps = s.orElseThrow();
+                Optional<String> declared =
+                        module == null || module.isBlank() ? currentVersion(ps, parts[0], parts[1]) : Optional.empty();
+                current = declared.or(() -> selectedVersion(ps, module, dir(project), parts[0], parts[1]))
+                        .orElse(null);
             }
             List<RemoteRepository> repos =
                     s.map(ProjectSession::allRepositories).orElseGet(ctx::remoteRepositories);
@@ -338,7 +347,10 @@ public final class McpService implements AutoCloseable {
             }
             for (org.apache.maven.model.Dependency d : m.effective().getDependencies()) {
                 String key = d.getGroupId() + ":" + d.getArtifactId();
-                if (reactorKeys.contains(key) || "system".equals(d.getScope()) || d.getVersion() == null) {
+                if (reactorKeys.contains(key)
+                        || "system".equals(d.getScope())
+                        || d.getVersion() == null
+                        || isRange(d.getVersion())) {
                     continue;
                 }
                 declared.computeIfAbsent(key + ":" + d.getVersion(), k -> new ArrayList<>())
@@ -371,32 +383,55 @@ public final class McpService implements AutoCloseable {
                         "note",
                         "direct dependencies and plugins with versions as resolved in the effective model;"
                                 + " versions set via dependencyManagement or pluginManagement change in the"
-                                + " BOM or parent that manages them; plugins bound by Maven's lifecycle are"
-                                + " listed too"));
+                                + " BOM or parent that manages them; only plugins declared in <build><plugins>"
+                                + " are checked, lifecycle plugins not declared there are not"));
     }
 
     private static List<Map<String, Object>> outdated(
             Map<String, List<String>> declared, Context ctx, boolean previews, List<String> failed, int[] upToDate) {
-        List<Map<String, Object>> outdated = new ArrayList<>();
-        for (Map.Entry<String, List<String>> e : declared.entrySet()) {
-            String[] gav = e.getKey().split(":");
-            try {
-                Map<String, Object> c = Versions.candidates(
-                        gav[2], newerVersions(ctx, ctx.remoteRepositories(), gav[0], gav[1], gav[2]), previews);
-                if (c.get("latest") == null) {
-                    upToDate[0]++;
-                    continue;
-                }
-                outdated.add(Json.obj()
-                        .with("artifact", gav[0] + ":" + gav[1])
-                        .with("current", gav[2])
-                        .with("candidates", c)
-                        .with("modules", e.getValue().size() <= 5 ? e.getValue() : null));
-            } catch (ToolException ex) {
-                failed.add(gav[0] + ":" + gav[1] + ": " + ex.getMessage());
+        // One metadata lookup per artifact, the slow part on a cold cache: run them side by side. Pool
+        // threads inherit this thread's context class loader, which common-pool threads would not.
+        ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, Math.min(8, declared.size())));
+        try {
+            Map<String, Future<List<String>>> lookups = new LinkedHashMap<>();
+            for (String key : declared.keySet()) {
+                String[] gav = key.split(":");
+                lookups.put(
+                        key, pool.submit(() -> newerVersions(ctx, ctx.remoteRepositories(), gav[0], gav[1], gav[2])));
             }
+            List<Map<String, Object>> outdated = new ArrayList<>();
+            for (Map.Entry<String, List<String>> e : declared.entrySet()) {
+                String[] gav = e.getKey().split(":");
+                try {
+                    Map<String, Object> c = Versions.candidates(gav[2], await(lookups.get(e.getKey())), previews);
+                    if (c.get("latest") == null) {
+                        upToDate[0]++;
+                        continue;
+                    }
+                    outdated.add(Json.obj()
+                            .with("artifact", gav[0] + ":" + gav[1])
+                            .with("current", gav[2])
+                            .with("candidates", c)
+                            .with("modules", e.getValue().size() <= 5 ? e.getValue() : null));
+                } catch (ToolException ex) {
+                    failed.add(gav[0] + ":" + gav[1] + ": " + ex.getMessage());
+                }
+            }
+            return outdated;
+        } finally {
+            pool.shutdownNow();
         }
-        return outdated;
+    }
+
+    private static <T> T await(Future<T> future) {
+        try {
+            return future.get();
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof RuntimeException r ? r : new ToolException(rootMessage(e), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ToolException("interrupted", e);
+        }
     }
 
     private Optional<String> currentVersion(ProjectSession s, String groupId, String artifactId) {
@@ -411,7 +446,7 @@ public final class McpService implements AutoCloseable {
                             : Stream.empty());
             Optional<String> v = all.filter(d -> groupId.equals(d.getGroupId()) && artifactId.equals(d.getArtifactId()))
                     .map(org.apache.maven.model.Dependency::getVersion)
-                    .filter(x -> x != null && !x.isBlank())
+                    .filter(x -> x != null && !x.isBlank() && !isRange(x))
                     .findFirst();
             if (v.isEmpty() && m.effective().getBuild() != null) {
                 v = m.effective().getBuild().getPlugins().stream()
@@ -425,6 +460,11 @@ public final class McpService implements AutoCloseable {
             }
         }
         return Optional.empty();
+    }
+
+    /** A range has no single current version to compare against; the graph's selection does. */
+    private static boolean isRange(String version) {
+        return version.startsWith("[") || version.startsWith("(");
     }
 
     private static List<String> newerVersions(
@@ -774,19 +814,19 @@ public final class McpService implements AutoCloseable {
     private ProjectSession session(Path dir) {
         try {
             return sessions.forPath(dir);
-        } catch (IOException e) {
-            throw new ToolException("no Maven project at " + dir + ": " + rootMessage(e), e);
-        } catch (RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             throw new ToolException("cannot load the Maven project at " + dir + ": " + rootMessage(e), e);
         }
     }
 
+    /** Empty only when there is no project at all; a project that fails to load is an error, not "no project". */
     private Optional<ProjectSession> optionalSession(Path dir) {
-        try {
-            return Optional.of(sessions.forPath(dir));
-        } catch (Exception e) {
-            return Optional.empty();
+        for (Path p = dir; p != null; p = p.getParent()) {
+            if (Files.isRegularFile(p.resolve("pom.xml"))) {
+                return Optional.of(session(dir));
+            }
         }
+        return Optional.empty();
     }
 
     private Module module(ProjectSession s, String selector, Path cwd) {
@@ -834,14 +874,10 @@ public final class McpService implements AutoCloseable {
         return standaloneContext;
     }
 
+    /** First line only: a tool error should read as one sentence. */
     static String rootMessage(Throwable t) {
-        String msg = null;
-        for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
-            if (c.getMessage() != null && !c.getMessage().isBlank()) {
-                msg = c.getMessage();
-            }
-        }
-        return msg != null ? msg.lines().findFirst().orElse(msg) : t.getClass().getSimpleName();
+        String msg = ProjectSession.rootMessage(t);
+        return msg.lines().findFirst().orElse(msg);
     }
 
     @Override

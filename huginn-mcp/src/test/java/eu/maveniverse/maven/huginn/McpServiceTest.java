@@ -170,9 +170,18 @@ class McpServiceTest {
     @Test
     void versionsOfAnArtifactSkipPreviewsUnlessAsked() {
         String json = service.versions(null, null, "com.acme.lib:libc", null);
-        assertContains(json, "\"recent\":[\"1.0\",\"2.0\",\"3.0\"]");
+        assertContains(json, "\"recent\":[\"2.0\",\"3.0\"]");
         assertFalse(json.contains("2.1-RC1"), json);
         assertContains(service.versions(null, null, "com.acme.lib:libc", true), "2.1-RC1");
+    }
+
+    @Test
+    void versionsOfATransitiveArtifactTakeTheSelectedVersion() {
+        // libc is only transitive: liba wants 1.0 and wins the tie with libb's 2.0
+        assertContains(
+                service.versions(null, null, "com.acme.lib:libc", null), "\"current\":\"1.0\"", "\"latest\":\"3.0\"");
+        assertContains(
+                service.versions(null, "core", "com.acme.lib:libc", null), "\"current\":\"1.0\"", "\"latest\":\"3.0\"");
     }
 
     @Test
@@ -196,6 +205,23 @@ class McpServiceTest {
         assertContains(json, "\"outdated_plugins\":[{\"artifact\":\"com.acme.lib:pluginx\"", "\"latest\":\"2.0\"");
         assertContains(service.versions(null, "core", "com.acme.lib:pluginx", null), "\"current\":\"1.0\"", "\"2.0\"");
         assertFalse(service.versions(null, "app", null, null).contains("pluginx"));
+    }
+
+    @Test
+    void versionsOfARangeDependencyUseTheSelectedVersion() throws IOException {
+        Path proj = tmp.resolve("with-range");
+        DemoReactor.write(
+                proj.resolve("pom.xml"),
+                "<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>r</artifactId>"
+                        + "<version>1</version><dependencies><dependency><groupId>com.acme.lib</groupId>"
+                        + "<artifactId>libc</artifactId><version>[1.0,2.0]</version></dependency></dependencies>"
+                        + "</project>");
+        String outdated = service.versions(proj.toString(), null, null, null);
+        assertFalse(outdated.contains("errors"), outdated);
+        assertContains(
+                service.versions(proj.toString(), null, "com.acme.lib:libc", null),
+                "\"current\":\"2.0\"",
+                "\"latest\":\"3.0\"");
     }
 
     @Test
@@ -343,6 +369,16 @@ class McpServiceTest {
             Files.writeString(pom, original);
         }
         assertContains(service.describe(null, null), "\"id\":\"com.acme:core:1.4.0\"");
+    }
+
+    @Test
+    void aBrokenRootPomIsAnErrorNotNoProject() throws IOException {
+        Path proj = tmp.resolve("broken-root");
+        DemoReactor.write(proj.resolve(".mvn/maven.config"), "");
+        DemoReactor.write(proj.resolve("pom.xml"), "<project><modelVersion>4.0.0</modelVersion>");
+        ToolException e = assertThrows(
+                ToolException.class, () -> service.sources(proj.toString(), null, "com.acme.lib:liba", null));
+        assertContains(e.getMessage(), "cannot load the Maven project");
     }
 
     @Test
