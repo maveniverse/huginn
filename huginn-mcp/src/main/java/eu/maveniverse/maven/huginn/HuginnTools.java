@@ -17,7 +17,7 @@ import java.nio.file.Path;
 import java.util.function.Supplier;
 
 /**
- * MCP surface: seven read-only tools. Descriptions are short on purpose, since every tool
+ * MCP surface: read-only tools. Descriptions are short on purpose, since every tool
  * description is sent to the agent on every turn. Results are compact JSON.
  */
 @ApplicationScoped
@@ -163,6 +163,24 @@ public class HuginnTools {
             @ToolArg(description = PROJECT, required = false) String project,
             @ToolArg(description = MODULE, required = false) String module) {
         return call(() -> service.sources(project, module, artifact, className));
+    }
+
+    @Tool(
+            description = "Goals of a Maven plugin, or one goal's parameters with their user property (-D) and"
+                    + " default, at the version the project uses (else the latest release).",
+            annotations =
+                    @Annotations(
+                            readOnlyHint = true,
+                            destructiveHint = false,
+                            idempotentHint = true,
+                            openWorldHint = true))
+    String plugin(
+            @ToolArg(description = "Plugin: groupId:artifactId[:version], or a short name such as 'surefire'")
+                    String plugin,
+            @ToolArg(description = "Goal to list the parameters of, e.g. 'test'", required = false) String goal,
+            @ToolArg(description = PROJECT, required = false) String project,
+            @ToolArg(description = MODULE, required = false) String module) {
+        return call(() -> service.plugin(project, module, plugin, goal));
     }
 
     // ponytail: one call at a time, so a reload never closes a session another call is using;

@@ -46,6 +46,7 @@ final class DemoReactor {
         library("pluginx", List.of("1.0", "2.0"), null);
         library("eu.maveniverse.maven.mimir", "extension3", List.of("0.3.5", "0.3.6", "0.4.0-RC1"), null);
         sourcesJar("liba", "1.0");
+        pluginJar("pluginx", "1.0");
         write(
                 repo.resolve("com/acme/lib/acme-bom/1.0/acme-bom-1.0.pom"),
                 "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme.lib</groupId>"
@@ -154,6 +155,35 @@ final class DemoReactor {
                 ZipOutputStream zip = new ZipOutputStream(out)) {
             zip.putNextEntry(new ZipEntry("com/acme/lib/Hello.java"));
             zip.write("package com.acme.lib; public class Hello {}".getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private void pluginJar(String artifactId, String version) throws IOException {
+        Path jar = repo.resolve("com/acme/lib")
+                .resolve(artifactId)
+                .resolve(version)
+                .resolve(artifactId + "-" + version + ".jar");
+        try (OutputStream out = Files.newOutputStream(jar);
+                ZipOutputStream zip = new ZipOutputStream(out)) {
+            zip.putNextEntry(new ZipEntry("META-INF/maven/plugin.xml"));
+            zip.write("""
+                    <plugin><goalPrefix>x</goalPrefix><mojos><mojo>
+                      <goal>run</goal><phase>verify</phase>
+                      <description>Runs the &lt;b&gt;thing&lt;/b&gt;. More text.</description>
+                      <parameters>
+                        <parameter><name>skip</name><type>boolean</type><required>false</required>
+                          <editable>true</editable><description>Skips it.</description></parameter>
+                        <parameter><name>project</name><type>org.apache.maven.project.MavenProject</type>
+                          <required>true</required><editable>false</editable><description>The project.</description></parameter>
+                        <parameter><name>count</name><type>int</type><required>true</required>
+                          <editable>true</editable><description>How many.</description><deprecated>no</deprecated></parameter>
+                      </parameters>
+                      <configuration>
+                        <skip implementation="boolean" default-value="false">${x.skip}</skip>
+                        <project implementation="org.apache.maven.project.MavenProject" default-value="${project}"/>
+                      </configuration>
+                    </mojo></mojos></plugin>
+                    """.getBytes(StandardCharsets.UTF_8));
         }
     }
 

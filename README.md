@@ -6,7 +6,7 @@ Built on [MIMA](https://github.com/maveniverse/mima), [mase](https://github.com/
 
 ## Tools
 
-There are seven tools, all read-only. Every one takes an optional `project` (any directory or `pom.xml` inside the reactor; default: the server's working directory) and most take `module` (path relative to the root, artifactId, or `groupId:artifactId`). Results are compact JSON.
+There are eight tools, all read-only. Every one takes an optional `project` (any directory or `pom.xml` inside the reactor; default: the server's working directory) and most take `module` (path relative to the root, artifactId, or `groupId:artifactId`). Results are compact JSON.
 
 | Tool | Answers |
 |---|---|
@@ -16,6 +16,7 @@ There are seven tools, all read-only. Every one takes an optional `project` (any
 | `versions` | Upgrade candidates from the project's own repositories: latest, latest within the same major, latest within the same minor; pre-releases skipped unless asked for. Works for plugins too, using the project's plugin repositories. Without an artifact it lists outdated direct dependencies and plugins, each with the POM or property to edit. |
 | `search` | Maven Central search by text or `g:`/`a:` query, paged with `limit` and `page`. |
 | `sources` | Unpacks a dependency's sources jar into `~/.cache/huginn/sources/`, or returns one class's source. Without a version, uses the version this project resolves. |
+| `plugin` | A plugin's goals, or one goal's parameters with the user property (`-Dx`) and default of each, read from the plugin's descriptor. A short name like `surefire` works; the version is the one the project uses, else the latest release. |
 | `extensions` | Which core extensions are declared in the project (`.mvn/extensions.xml`), user (`~/.m2/extensions.xml`) and installation (`$MAVEN_HOME/conf/extensions.xml`) files, and which useful ones are missing (MWM, Mimir, Nisse, Muninn), each with its latest release from the project's repositories and the exact `<extension>` snippet to add. Missing ones are proposed user-wide, and Maven 3.10.x is recommended. It changes nothing; applying the snippet is up to the agent. |
 
 Builds are deliberately not here. Running `mvn` with the Muninn extension (which the `extensions` tool proposes) gives agents a compact JSON report of the build itself; this server covers the questions a shell can't answer cheaply.
@@ -26,7 +27,7 @@ Builds are deliberately not here. Running `mvn` with the Muninn extension (which
 - **The project's repositories:** repositories declared in the POMs are added to those from settings, and mirrors and authentication from settings apply.
 - **Reactor siblings resolve from the working tree:** a workspace reader serves modules that were never installed, including their effective models, the same way Maven's `ReactorReader` does.
 - **CI-friendly versions work:** `-D` and `-P` from `.mvn/maven.config` apply, with user properties winning as on the command line. MIMA's `MavenModelReader` deliberately demotes user properties for dependency POMs (MNG-7563), so project models are built separately in `ProjectModels`.
-- **Few tools:** seven, because every tool description costs the agent context on every turn.
+- **Few tools:** eight, because every tool description costs the agent context on every turn.
 - **Caching:** a loaded reactor is cached and reloaded only when a POM or `maven.config` changes. Unpacked sources are cached under `$XDG_CACHE_HOME/huginn/sources/` (default `~/.cache`), and logs go to `~/.cache/huginn/huginn.log`, since stdout belongs to the MCP protocol.
 
 ## Use

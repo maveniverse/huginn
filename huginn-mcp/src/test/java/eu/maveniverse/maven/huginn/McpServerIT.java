@@ -107,7 +107,7 @@ class McpServerIT {
     }
 
     @Test
-    void listsTheSevenReadOnlyTools() throws IOException {
+    void listsTheReadOnlyTools() throws IOException {
         JsonNode tools = request("tools/list", "{}").at("/result/tools");
         Set<String> names = new TreeSet<>();
         for (JsonNode t : tools) {
@@ -122,7 +122,9 @@ class McpServerIT {
                     t.toString());
             assertFalse(t.get("description").asText().isBlank(), t.toString());
         }
-        assertEquals(Set.of("describe", "dependencies", "why", "versions", "search", "sources", "extensions"), names);
+        assertEquals(
+                Set.of("describe", "dependencies", "why", "versions", "search", "sources", "plugin", "extensions"),
+                names);
     }
 
     @Test
@@ -133,6 +135,7 @@ class McpServerIT {
                 case "why" -> assertEquals("[\"artifact\"]", required.toString());
                 case "search" -> assertEquals("[\"query\"]", required.toString());
                 case "sources" -> assertEquals("[\"artifact\"]", required.toString());
+                case "plugin" -> assertEquals("[\"plugin\"]", required.toString());
                 default -> assertTrue(required.isMissingNode() || required.isEmpty(), t.toString());
             }
         }

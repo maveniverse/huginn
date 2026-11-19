@@ -297,6 +297,31 @@ class McpServiceTest {
         assertFalse(json.contains(".mvn/extensions.xml"), json);
     }
 
+    // ---- plugin -------------------------------------------------------------------------------------
+
+    @Test
+    void pluginListsGoalsAtTheProjectsVersion() {
+        assertContains(
+                service.plugin(null, "core", "pluginx", null),
+                "\"plugin\":\"com.acme.lib:pluginx:1.0\"",
+                "\"version_source\":\"project\"",
+                "\"prefix\":\"x\"",
+                "{\"goal\":\"run\",\"phase\":\"verify\",\"description\":\"Runs the thing.\"}");
+    }
+
+    @Test
+    void pluginGoalListsTheParametersAUserCanSet() {
+        String json = service.plugin(null, null, "com.acme.lib:pluginx:1.0", "run");
+        assertContains(
+                json,
+                "{\"name\":\"skip\",\"type\":\"boolean\",\"property\":\"x.skip\",\"default\":\"false\","
+                        + "\"description\":\"Skips it.\"}",
+                "{\"name\":\"count\",\"type\":\"int\",\"required\":true,\"deprecated\":true");
+        assertFalse(json.contains("\"name\":\"project\""), json); // set by Maven, not by users
+        ToolException e = assertThrows(ToolException.class, () -> service.plugin(null, null, "pluginx", "nope"));
+        assertContains(e.getMessage(), "goals: run");
+    }
+
     // ---- sources ------------------------------------------------------------------------------------
 
     @Test

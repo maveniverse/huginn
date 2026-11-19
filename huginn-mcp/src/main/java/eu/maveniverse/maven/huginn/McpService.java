@@ -14,6 +14,7 @@ import eu.maveniverse.maven.huginn.project.ProjectSessions;
 import eu.maveniverse.maven.huginn.render.Graphs;
 import eu.maveniverse.maven.huginn.render.Json;
 import eu.maveniverse.maven.huginn.support.Extensions;
+import eu.maveniverse.maven.huginn.support.PluginDescriptors;
 import eu.maveniverse.maven.huginn.support.Sources;
 import eu.maveniverse.maven.huginn.support.Versions;
 import eu.maveniverse.maven.mima.context.Context;
@@ -78,7 +79,7 @@ import org.eclipse.aether.util.graph.transformer.ConflictResolver;
 import org.eclipse.aether.version.Version;
 
 /**
- * The seven operations behind the MCP tools, independent of the MCP framework. Every operation
+ * The operations behind the MCP tools, independent of the MCP framework. Every operation
  * is project-first: it works on the reactor that contains the given path (default: the
  * server's working directory), with that project's effective models and repositories.
  */
@@ -692,6 +693,123 @@ public final class McpService implements AutoCloseable {
         }
         return Json.write(o.with("files", Sources.countSourceFiles(extracted))
                 .with("hint", "read files under dir, or call again with className=<fully qualified name>"));
+    }
+
+    // ---- plugin -----------------------------------------------------------------------------------
+
+    public String plugin(String project, String module, String plugin, String goal) {
+        if (plugin == null || plugin.isBlank()) {
+            throw new ToolException(
+                    "plugin is required, e.g. 'surefire' or 'org.apache.maven.plugins:maven-surefire-plugin'");
+        }
+        String[] parts = plugin.trim().split(":");
+        Path dir = dir(project);
+        Optional<ProjectSession> s = optionalSession(dir);
+        Optional<Plugin> declared = s.flatMap(ps -> projectPlugin(ps, module, dir, parts));
+        String groupId =
+                parts.length >= 2 ? parts[0] : declared.map(Plugin::getGroupId).orElse("org.apache.maven.plugins");
+        String artifactId = parts.length >= 2
+                ? parts[1]
+                : declared.map(Plugin::getArtifactId)
+                        .orElse(parts[0].endsWith("-plugin") ? parts[0] : "maven-" + parts[0] + "-plugin");
+        Context ctx = s.map(ProjectSession::pluginContext).orElseGet(this::standaloneContext);
+        String version =
+                parts.length >= 3 ? parts[2] : declared.map(Plugin::getVersion).orElse(null);
+        String versionSource = parts.length >= 3 ? null : version != null ? "project" : "latest release";
+        if (version == null) {
+            List<String> release =
+                    Versions.recent(newerVersions(ctx, ctx.remoteRepositories(), groupId, artifactId, "0"), false, 1);
+            if (release.isEmpty()) {
+                throw new ToolException("no release of " + groupId + ":" + artifactId
+                        + " in the plugin repositories; pass groupId:artifactId:version");
+            }
+            version = release.get(0);
+        }
+        String id = groupId + ":" + artifactId + ":" + version;
+        PluginDescriptors.Descriptor descriptor;
+        try {
+            Path jar = ctx.repositorySystem()
+                    .resolveArtifact(
+                            ctx.repositorySystemSession(),
+                            new ArtifactRequest(
+                                    new DefaultArtifact(groupId, artifactId, "jar", version),
+                                    ctx.remoteRepositories(),
+                                    null))
+                    .getArtifact()
+                    .getFile()
+                    .toPath();
+            descriptor = PluginDescriptors.read(jar);
+        } catch (Exception e) {
+            throw new ToolException("cannot read the plugin descriptor of " + id + ": " + rootMessage(e), e);
+        }
+        Json.Obj o = Json.obj().with("plugin", id).with("version_source", versionSource);
+        if (goal == null || goal.isBlank()) {
+            return Json.write(o.with("prefix", descriptor.goalPrefix())
+                    .with(
+                            "goals",
+                            descriptor.mojos().stream()
+                                    .map(m -> Json.obj()
+                                            .with("goal", m.goal())
+                                            .with("phase", m.phase())
+                                            .with("description", m.description()))
+                                    .toList())
+                    .with("hint", "call again with goal=<goal> for its parameters"));
+        }
+        PluginDescriptors.Mojo mojo = descriptor.mojos().stream()
+                .filter(m -> m.goal().equals(goal.trim()))
+                .findFirst()
+                .orElseThrow(() -> new ToolException("no goal '" + goal + "' in " + id + "; goals: "
+                        + descriptor.mojos().stream()
+                                .map(PluginDescriptors.Mojo::goal)
+                                .collect(Collectors.joining(", "))));
+        List<Map<String, Object>> parameters = new ArrayList<>();
+        for (PluginDescriptors.Parameter p : mojo.parameters()) {
+            parameters.add(Json.obj()
+                    .with("name", p.name())
+                    .with("type", p.type())
+                    .with("required", p.required() ? Boolean.TRUE : null)
+                    .with("property", p.property())
+                    .with("default", p.defaultValue())
+                    .with("deprecated", p.deprecated() ? Boolean.TRUE : null)
+                    .with("description", p.description()));
+        }
+        return Json.write(o.with("goal", mojo.goal())
+                .with("phase", mojo.phase())
+                .with("description", mojo.description())
+                .with("parameters", parameters)
+                .with("note", "property is the user property, set as -D<property>=value"));
+    }
+
+    /**
+     * The plugin as the project declares it, in the module's build plugins or plugin management first,
+     * then in any module. A bare name matches {@code name}, {@code maven-name-plugin} and
+     * {@code name-maven-plugin}.
+     */
+    private Optional<Plugin> projectPlugin(ProjectSession s, String module, Path dir, String[] parts) {
+        String name = parts[0];
+        Predicate<Plugin> matches = parts.length >= 2
+                ? p -> parts[0].equals(p.getGroupId()) && parts[1].equals(p.getArtifactId())
+                : p -> p.getArtifactId().equals(name)
+                        || p.getArtifactId().equals("maven-" + name + "-plugin")
+                        || p.getArtifactId().equals(name + "-maven-plugin");
+        List<Module> candidates = new ArrayList<>();
+        candidates.add(module(s, module, dir));
+        s.modules().stream().filter(m -> !candidates.contains(m)).forEach(candidates::add);
+        for (Module m : candidates) {
+            if (m.effective() == null || m.effective().getBuild() == null) {
+                continue;
+            }
+            Stream<Plugin> all = Stream.concat(
+                    m.effective().getBuild().getPlugins().stream(),
+                    m.effective().getBuild().getPluginManagement() != null
+                            ? m.effective().getBuild().getPluginManagement().getPlugins().stream()
+                            : Stream.empty());
+            Optional<Plugin> found = all.filter(matches).findFirst();
+            if (found.isPresent()) {
+                return found;
+            }
+        }
+        return Optional.empty();
     }
 
     /** The version the project actually ends up with: declared, managed, or selected in the graph. */
