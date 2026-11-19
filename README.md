@@ -80,5 +80,6 @@ Known gaps:
 
 - **Profile modules:** profiles that contribute `<modules>` follow Maven's activation rules (`-P` in `maven.config`, `jdk`, `os`, `property` and `file` conditions, `activeByDefault` only when nothing else is active). Properties come from `maven.config` `-D`, system properties and `env.*`; profiles from `settings.xml` are not consulted, nor are `-D` flags given only on the real command line.
 - **Maven 4:** POMs using model version 4.1.0 are not read, because the reader is Maven 3.9's.
-- **Search:** Central only (its CSC endpoint, which wants an explicit `AND` between terms, so free text is joined with `AND`).
+- **Search:** Central only (its CSC endpoint, which wants an explicit `AND` between terms, so free text is joined with `AND`). A class search (`fc:`) lists every jar containing the class, shaded copies included, sorted by artifactId, so without `g:` the owning artifact may not be on the first page.
+- **Version properties:** `version_property` is read from the line of the `<version>` start tag, so a version whose value is on the next line shows no property (`version_in` is still right).
 - **Upstream candidates:** a "project mode" in MIMA's MavenModelReader, and a standalone reactor locator, would let `ProjectModels` and the reactor code move upstream.
