@@ -309,7 +309,12 @@ public final class McpService implements AutoCloseable {
             }
             String current = parts.length >= 3 ? parts[parts.length - 1] : null;
             if (current == null && s.isPresent()) {
-                current = currentVersion(s.orElseThrow(), parts[0], parts[1]).orElse(null);
+                // declared first (cheap, finds plugins too), then the graph, like sources does
+                ProjectSession ps = s.orElseThrow();
+                Optional<String> declared =
+                        module == null || module.isBlank() ? currentVersion(ps, parts[0], parts[1]) : Optional.empty();
+                current = declared.or(() -> selectedVersion(ps, module, dir(project), parts[0], parts[1]))
+                        .orElse(null);
             }
             List<RemoteRepository> repos =
                     s.map(ProjectSession::allRepositories).orElseGet(ctx::remoteRepositories);

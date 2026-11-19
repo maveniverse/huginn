@@ -170,9 +170,18 @@ class McpServiceTest {
     @Test
     void versionsOfAnArtifactSkipPreviewsUnlessAsked() {
         String json = service.versions(null, null, "com.acme.lib:libc", null);
-        assertContains(json, "\"recent\":[\"1.0\",\"2.0\",\"3.0\"]");
+        assertContains(json, "\"recent\":[\"2.0\",\"3.0\"]");
         assertFalse(json.contains("2.1-RC1"), json);
         assertContains(service.versions(null, null, "com.acme.lib:libc", true), "2.1-RC1");
+    }
+
+    @Test
+    void versionsOfATransitiveArtifactTakeTheSelectedVersion() {
+        // libc is only transitive: liba wants 1.0 and wins the tie with libb's 2.0
+        assertContains(
+                service.versions(null, null, "com.acme.lib:libc", null), "\"current\":\"1.0\"", "\"latest\":\"3.0\"");
+        assertContains(
+                service.versions(null, "core", "com.acme.lib:libc", null), "\"current\":\"1.0\"", "\"latest\":\"3.0\"");
     }
 
     @Test
