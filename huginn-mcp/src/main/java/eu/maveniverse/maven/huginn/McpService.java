@@ -832,8 +832,7 @@ public final class McpService implements AutoCloseable {
             jar = ctx.repositorySystem()
                     .resolveArtifact(ctx.repositorySystemSession(), request)
                     .getArtifact()
-                    .getFile()
-                    .toPath();
+                    .getPath();
         } catch (Exception e) {
             throw new ToolException(
                     "no sources jar for " + parts[0] + ":" + parts[1] + ":" + version + ": " + rootMessage(e), e);
@@ -907,8 +906,7 @@ public final class McpService implements AutoCloseable {
                                     ctx.remoteRepositories(),
                                     null))
                     .getArtifact()
-                    .getFile()
-                    .toPath();
+                    .getPath();
             descriptor = PluginDescriptors.read(jar);
         } catch (Exception e) {
             throw new ToolException("cannot read the plugin descriptor of " + id + ": " + rootMessage(e), e);
