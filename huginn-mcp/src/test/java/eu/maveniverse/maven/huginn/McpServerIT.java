@@ -200,6 +200,14 @@ class McpServerIT {
         }
     }
 
+    /** A jar's SHA-1 names the one artifact with exactly that content. */
+    @Test
+    void searchIdentifiesAJarBySha1() throws IOException {
+        assertEquals(
+                "[\"com.google.guava:guava:31.0.1-jre\"]",
+                search("119ea2b2bc205b138974d351777b20f02b92704b").toString());
+    }
+
     /** Central rejects terms separated by a bare space; free text must still get answers. */
     @Test
     void searchTakesFreeText() throws IOException {

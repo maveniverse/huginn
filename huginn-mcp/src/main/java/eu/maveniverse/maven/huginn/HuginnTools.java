@@ -79,8 +79,13 @@ public class HuginnTools {
                             description = "groupId:artifactId:version to force, as dependencyManagement would; returns"
                                     + " what changes on the classpath instead of the tree",
                             required = false)
-                    String override) {
-        return call(() -> service.dependencies(project, module, scope, maxDepth, override));
+                    String override,
+            @ToolArg(
+                            description = "groupId:artifactId:version to add as a direct compile dependency; returns"
+                                    + " what it brings in and which existing versions it moves, instead of the tree",
+                            required = false)
+                    String add) {
+        return call(() -> service.dependencies(project, module, scope, maxDepth, override, add));
     }
 
     @Tool(
@@ -126,7 +131,7 @@ public class HuginnTools {
     @Tool(
             description = "Search Maven Central for artifacts by name, coordinates or class, e.g. 'jackson databind',"
                     + " 'g:com.fasterxml.jackson.core a:jackson-databind', or 'fc:<fully qualified class name>' to"
-                    + " find which artifact has a class.",
+                    + " find which artifact has a class, or a jar's SHA-1 to identify an unknown jar.",
             annotations =
                     @Annotations(
                             readOnlyHint = true,
