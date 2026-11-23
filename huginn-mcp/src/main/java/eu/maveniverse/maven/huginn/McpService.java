@@ -32,6 +32,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
@@ -318,15 +319,18 @@ public final class McpService implements AutoCloseable {
 
     // ---- dependencies ---------------------------------------------------------------------------------
 
-    public String dependencies(String project, String module, String scope, Integer maxDepth, String override) {
+    public String dependencies(
+            String project, String module, String scope, Integer maxDepth, String override, String add) {
         Path dir = dir(project);
         ProjectSession s = session(dir);
         Module m = requireBuildableModule(s, module, dir);
         Scope rs = scope(scope);
-        if (override != null && !override.isBlank()) {
-            return whatIf(s, m, rs, override.trim());
+        Artifact forced = gav(override, "override");
+        Artifact added = gav(add, "add");
+        if (forced != null || added != null) {
+            return whatIf(s, m, rs, forced, added);
         }
-        CollectResult cr = collect(s, m, rs, null);
+        CollectResult cr = collect(s, m, rs, null, null);
         Graphs.Tree t = Graphs.tree(cr.getRoot(), maxDepth == null ? 0 : Math.max(0, maxDepth));
         return Json.write(Json.obj()
                 .with("module", s.rel(m.raw().dir()))
@@ -339,15 +343,25 @@ public final class McpService implements AutoCloseable {
                 .with("errors", errors(cr)));
     }
 
-    /** What changes on the classpath when one artifact is forced to a version, as dependencyManagement would. */
-    private String whatIf(ProjectSession s, Module m, Scope rs, String override) {
-        String[] gav = override.split(":");
-        if (gav.length != 3) {
-            throw new ToolException("override must be groupId:artifactId:version");
+    private static Artifact gav(String value, String name) {
+        if (value == null || value.isBlank()) {
+            return null;
         }
-        Artifact forced = new DefaultArtifact(gav[0], gav[1], "jar", gav[2]);
-        Map<String, String> before = Graphs.selected(collect(s, m, rs, null).getRoot());
-        CollectResult cr = collect(s, m, rs, forced);
+        String[] gav = value.trim().split(":");
+        if (gav.length != 3) {
+            throw new ToolException(name + " must be groupId:artifactId:version");
+        }
+        return new DefaultArtifact(gav[0], gav[1], "jar", gav[2]);
+    }
+
+    /**
+     * What changes on the classpath when one artifact is forced to a version, as dependencyManagement would,
+     * and/or one is added as a direct dependency.
+     */
+    private String whatIf(ProjectSession s, Module m, Scope rs, Artifact forced, Artifact added) {
+        Map<String, String> before =
+                Graphs.selected(collect(s, m, rs, null, null).getRoot());
+        CollectResult cr = collect(s, m, rs, forced, added);
         Map<String, String> after = Graphs.selected(cr.getRoot());
         List<Map<String, Object>> changed = new ArrayList<>();
         List<String> removed = new ArrayList<>();
@@ -359,27 +373,31 @@ public final class McpService implements AutoCloseable {
                 changed.add(Json.obj().with("artifact", k).with("from", v).with("to", now));
             }
         });
-        List<String> added = new ArrayList<>();
+        List<String> addedDeps = new ArrayList<>();
         after.forEach((k, v) -> {
             if (!before.containsKey(k)) {
-                added.add(k + ":" + v);
+                addedDeps.add(k + ":" + v);
             }
         });
         Graphs.Tree t = Graphs.tree(cr.getRoot(), 0);
         return Json.write(Json.obj()
                 .with("module", s.rel(m.raw().dir()))
                 .with("scope", rs.name().toLowerCase())
-                .with("override", override)
+                .with("override", forced == null ? null : Models.id(forced))
+                .with("add", added == null ? null : Models.id(added))
                 .with("changed", changed)
-                .with("added", added)
+                .with("added", addedDeps)
                 .with("removed", removed)
                 .with("conflicts", new ArrayList<>(t.conflicts.values()))
                 .with("errors", errors(cr))
                 .with(
                         "hint",
-                        changed.isEmpty() && added.isEmpty() && removed.isEmpty()
+                        changed.isEmpty() && addedDeps.isEmpty() && removed.isEmpty()
                                 ? "nothing changes: not a dependency of this module, or already at that version"
-                                : "to apply it, set the version in dependencyManagement (or the dependency itself)"));
+                                : added == null
+                                        ? "to apply it, set the version in dependencyManagement (or the dependency itself)"
+                                        : "'changed' lists versions the new dependency moves; pin them in"
+                                                + " dependencyManagement if that is not wanted"));
     }
 
     // ---- why ---------------------------------------------------------------------------------------------
@@ -405,7 +423,7 @@ public final class McpService implements AutoCloseable {
         List<Map<String, Object>> found = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         for (Module m : targets) {
-            CollectResult cr = collect(s, m, rs, null);
+            CollectResult cr = collect(s, m, rs, null, null);
             List<Map<String, Object>> paths = Graphs.paths(cr.getRoot(), matcher, MAX_PATHS_PER_MODULE);
             if (!paths.isEmpty()) {
                 found.add(Json.obj().with("module", s.rel(m.raw().dir())).with("paths", paths));
@@ -686,6 +704,10 @@ public final class McpService implements AutoCloseable {
     static String centralQuery(String query) {
         // groupId:artifactId[:version] is rewritten to Central's field syntax; g:x or a:x already is
         String text = query.trim();
+        // a bare SHA-1 identifies a jar by its content: Central's field for it is '1'
+        if (text.matches("(?i)(1:)?[0-9a-f]{40}")) {
+            return "1:" + text.substring(text.length() - 40).toLowerCase(Locale.ROOT);
+        }
         if (text.matches("[^\\s:]+:[^\\s:]+(:[^\\s:]+)?") && !text.matches("(g|a|v|p|c|l|fc):.*")) {
             String[] gav = text.split(":");
             text = "g:" + gav[0] + " a:" + gav[1] + (gav.length > 2 ? " v:" + gav[2] : "");
@@ -810,8 +832,7 @@ public final class McpService implements AutoCloseable {
             jar = ctx.repositorySystem()
                     .resolveArtifact(ctx.repositorySystemSession(), request)
                     .getArtifact()
-                    .getFile()
-                    .toPath();
+                    .getPath();
         } catch (Exception e) {
             throw new ToolException(
                     "no sources jar for " + parts[0] + ":" + parts[1] + ":" + version + ": " + rootMessage(e), e);
@@ -885,8 +906,7 @@ public final class McpService implements AutoCloseable {
                                     ctx.remoteRepositories(),
                                     null))
                     .getArtifact()
-                    .getFile()
-                    .toPath();
+                    .getPath();
             descriptor = PluginDescriptors.read(jar);
         } catch (Exception e) {
             throw new ToolException("cannot read the plugin descriptor of " + id + ": " + rootMessage(e), e);
@@ -979,7 +999,7 @@ public final class McpService implements AutoCloseable {
             if (m.effective() == null || m.effective().getDependencies().isEmpty()) {
                 continue;
             }
-            CollectResult cr = collect(s, m, Scope.TEST, null);
+            CollectResult cr = collect(s, m, Scope.TEST, null, null);
             Optional<String> v = findSelected(cr.getRoot(), matcher, new LinkedHashSet<>());
             if (v.isPresent()) {
                 return v;
@@ -1083,11 +1103,17 @@ public final class McpService implements AutoCloseable {
         return matcher.find() ? matcher.group(1) : null;
     }
 
-    /** @param forced nullable: an artifact whose version wins everywhere, direct and transitive */
-    private CollectResult collect(ProjectSession s, Module m, Scope scope, Artifact forced) {
+    /**
+     * @param forced nullable: an artifact whose version wins everywhere, direct and transitive
+     * @param added nullable: an extra compile dependency, declared first so it wins over the module's own
+     */
+    private CollectResult collect(ProjectSession s, Module m, Scope scope, Artifact forced, Artifact added) {
         Model e = m.effective();
-        List<Dependency> deps = Models.dependencies(e, s.types()).stream()
-                .filter(d -> scope.direct.contains(d.getScope().isEmpty() ? "compile" : d.getScope()))
+        Stream<Dependency> extra = added == null ? Stream.empty() : Stream.of(new Dependency(added, "compile"));
+        List<Dependency> deps = Stream.concat(
+                        extra,
+                        Models.dependencies(e, s.types()).stream()
+                                .filter(d -> scope.direct.contains(d.getScope().isEmpty() ? "compile" : d.getScope())))
                 .map(d -> force(d, forced))
                 .toList();
         List<Dependency> managed = new ArrayList<>();

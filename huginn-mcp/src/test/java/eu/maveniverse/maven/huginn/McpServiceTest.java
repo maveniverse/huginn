@@ -124,7 +124,7 @@ class McpServiceTest {
 
     @Test
     void dependenciesResolveSiblingsFromTheWorkingTreeAndReportConflicts() {
-        String json = service.dependencies(null, "app", null, null, null);
+        String json = service.dependencies(null, "app", null, null, null, null);
         assertContains(
                 json,
                 "\"id\":\"com.acme:core:1.4.0\"", // never installed, served by the workspace reader
@@ -137,17 +137,19 @@ class McpServiceTest {
 
     @Test
     void dependenciesScopeFiltersTestDependencies() {
-        assertContains(service.dependencies(null, "app", "test", null, null), "com.acme.lib:libd:1.0");
-        assertFalse(service.dependencies(null, "app", "compile", null, null).contains("libd"));
-        assertFalse(service.dependencies(null, "app", "runtime", null, null).contains("libd"));
-        assertThrows(ToolException.class, () -> service.dependencies(null, "app", "bogus", null, null));
+        assertContains(service.dependencies(null, "app", "test", null, null, null), "com.acme.lib:libd:1.0");
+        assertFalse(
+                service.dependencies(null, "app", "compile", null, null, null).contains("libd"));
+        assertFalse(
+                service.dependencies(null, "app", "runtime", null, null, null).contains("libd"));
+        assertThrows(ToolException.class, () -> service.dependencies(null, "app", "bogus", null, null, null));
     }
 
     @Test
     void dependenciesScopeFiltersTransitiveRuntimeDependencies() {
-        assertContains(service.dependencies(null, "core", "runtime", null, null), "com.acme.lib:libf:1.0");
-        assertContains(service.dependencies(null, "core", "test", null, null), "com.acme.lib:libf:1.0");
-        String compile = service.dependencies(null, "core", "compile", null, null);
+        assertContains(service.dependencies(null, "core", "runtime", null, null, null), "com.acme.lib:libf:1.0");
+        assertContains(service.dependencies(null, "core", "test", null, null, null), "com.acme.lib:libf:1.0");
+        String compile = service.dependencies(null, "core", "compile", null, null, null);
         assertContains(compile, "com.acme.lib:libe:1.0");
         assertFalse(compile.contains("libf"), compile);
         assertContains(service.why(null, "core", "libf", "compile"), "try scope=test");
@@ -155,30 +157,51 @@ class McpServiceTest {
 
     @Test
     void dependenciesMaxDepthCountsWhatItHides() {
-        String json = service.dependencies(null, "app", null, 1, null);
+        String json = service.dependencies(null, "app", null, 1, null, null);
         assertContains(json, "\"id\":\"com.acme:core:1.4.0\"", "\"hidden_deps\":");
         assertFalse(json.contains("liba"), json);
     }
 
     @Test
     void dependenciesNeedsAModuleAtAnAggregatorRoot() {
-        ToolException e = assertThrows(ToolException.class, () -> service.dependencies(null, null, null, null, null));
+        ToolException e =
+                assertThrows(ToolException.class, () -> service.dependencies(null, null, null, null, null, null));
         assertContains(e.getMessage(), "aggregator", "app");
     }
 
     @Test
     void dependenciesOverrideShowsWhatChanges() {
         // libc is transitive: liba wants 1.0 and wins over libb's 2.0
-        String json = service.dependencies(null, "core", null, null, "com.acme.lib:libc:3.0");
+        String json = service.dependencies(null, "core", null, null, "com.acme.lib:libc:3.0", null);
         assertContains(json, "\"changed\":[{\"artifact\":\"com.acme.lib:libc\",\"from\":\"1.0\",\"to\":\"3.0\"}]");
         assertFalse(json.contains("\"conflicts\""), json); // both requests are forced to 3.0
         // a direct dependency is forced too
         assertContains(
-                service.dependencies(null, "core", null, null, "com.acme.lib:liba:2.0"),
+                service.dependencies(null, "core", null, null, "com.acme.lib:liba:2.0", null),
                 "{\"artifact\":\"com.acme.lib:liba\",\"from\":\"1.0\",\"to\":\"2.0\"}");
         assertContains(
-                service.dependencies(null, "core", null, null, "com.acme.lib:nope:1.0"), "\"hint\":\"nothing changes");
-        assertThrows(ToolException.class, () -> service.dependencies(null, "core", null, null, "libc"));
+                service.dependencies(null, "core", null, null, "com.acme.lib:nope:1.0", null),
+                "\"hint\":\"nothing changes");
+        assertThrows(ToolException.class, () -> service.dependencies(null, "core", null, null, "libc", null));
+    }
+
+    @Test
+    void dependenciesAddShowsWhatANewDependencyBringsAndMoves() {
+        // a direct libc:3.0 is nearer than the transitive libc:1.0, so it moves it
+        String json = service.dependencies(null, "core", null, null, null, "com.acme.lib:libc:3.0");
+        assertContains(
+                json,
+                "\"add\":\"com.acme.lib:libc:3.0\"",
+                "\"changed\":[{\"artifact\":\"com.acme.lib:libc\",\"from\":\"1.0\",\"to\":\"3.0\"}]");
+        // new to the classpath: listed as added
+        assertContains(
+                service.dependencies(null, "core", null, null, null, "com.acme.lib:libd:1.0"),
+                "\"added\":[\"com.acme.lib:libd:1.0\"]");
+        // wins over the module's own declaration of the same artifact
+        assertContains(
+                service.dependencies(null, "core", null, null, null, "com.acme.lib:liba:2.0"),
+                "{\"artifact\":\"com.acme.lib:liba\",\"from\":\"1.0\",\"to\":\"2.0\"}");
+        assertThrows(ToolException.class, () -> service.dependencies(null, "core", null, null, null, "libd"));
     }
 
     // ---- why ----------------------------------------------------------------------------------------
@@ -385,6 +408,9 @@ class McpServiceTest {
         assertEquals("g:com.google.guava", McpService.centralQuery("g:com.google.guava"));
         assertEquals("a:guava", McpService.centralQuery(" a:guava "));
         assertEquals("jackson AND databind", McpService.centralQuery("jackson databind"));
+        String sha1 = "119ea2b2bc205b138974d351777b20f02b92704b";
+        assertEquals("1:" + sha1, McpService.centralQuery(sha1.toUpperCase()));
+        assertEquals("1:" + sha1, McpService.centralQuery("1:" + sha1));
     }
 
     @Test
@@ -400,20 +426,20 @@ class McpServiceTest {
     void editingAPomReloadsTheReactor() throws IOException {
         Path pom = reactor.root.resolve("core/pom.xml");
         String original = Files.readString(pom);
-        assertContains(service.dependencies(null, "core", null, null, null), "liba:1.0");
+        assertContains(service.dependencies(null, "core", null, null, null, null), "liba:1.0");
         try {
             Files.writeString(
                     pom,
                     original.replace(
                             "<version>1.0</version></dependency><dependency>",
                             "<version>2.0</version></dependency><dependency>"));
-            String json = service.dependencies(null, "core", null, null, null);
+            String json = service.dependencies(null, "core", null, null, null, null);
             assertContains(json, "com.acme.lib:liba:2.0");
             assertFalse(json.contains("liba:1.0"), json);
         } finally {
             Files.writeString(pom, original);
         }
-        assertContains(service.dependencies(null, "core", null, null, null), "liba:1.0");
+        assertContains(service.dependencies(null, "core", null, null, null, null), "liba:1.0");
     }
 
     @Test
